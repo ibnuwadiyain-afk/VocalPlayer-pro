@@ -1,0 +1,6 @@
+{
+  "name": "VocalPlayer",
+  "description": "Offline Vocal-Only Android Video Player with on-device neural source separation",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
