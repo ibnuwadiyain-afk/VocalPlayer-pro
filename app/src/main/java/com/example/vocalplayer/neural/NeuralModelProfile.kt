@@ -29,9 +29,26 @@ data class NeuralModelProfile(
     val isDownloaded: Boolean = false
 ) {
     companion object {
+        val UVR_MDXNET_9482 = NeuralModelProfile(
+            id = "uvr_mdxnet_9482",
+            name = "UVR-MDX-NET 9482 (Vocal)",
+            architecture = ModelArchitecture.MDX_NET,
+            description = "True genuine UVR MDX-Net 9482 model (SDR 9.482). Official 4-channel complex STFT neural vocal separation.",
+            sampleRate = 44100,
+            isStereo = true,
+            isBuiltIn = false,
+            fileSizeFormatted = "28.3 MB (ONNX)",
+            latencyEstimateMs = 45,
+            recommendedMode = SeparationMode.BALANCED,
+            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR_MDXNET_9482.onnx",
+            sha256Checksum = "9d78f8566fa8198065214ab628be1de966a500c57786695aa4b13e2b27a7727d",
+            expectedSizeBytes = 29_742_080L,
+            isDownloaded = false
+        )
+
         val DEFAULT_BUILTIN = NeuralModelProfile(
             id = "builtin_neural_vocal",
-            name = "VocalPlayer Mobile Neural (Default)",
+            name = "VocalPlayer Mobile Neural",
             architecture = ModelArchitecture.BUILTIN_NEURAL_MASK,
             description = "Optimized neural complex spectrogram separator with vocal formant harmonic tracking.",
             sampleRate = 44100,
@@ -44,6 +61,7 @@ data class NeuralModelProfile(
         )
 
         val PRESET_PROFILES = listOf(
+            UVR_MDXNET_9482,
             DEFAULT_BUILTIN,
             NeuralModelProfile(
                 id = "mdx_net_vocal_hq",

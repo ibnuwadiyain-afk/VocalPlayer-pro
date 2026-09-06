@@ -71,6 +71,8 @@ class VocalVideoPlayer(private val context: Context) {
         setupPlayerListeners()
         setupAudioProcessorMetrics()
         refreshModelsList()
+        val initialModel = modelManager.getActiveModel()
+        selectModel(initialModel)
         loadDemoClips()
     }
 

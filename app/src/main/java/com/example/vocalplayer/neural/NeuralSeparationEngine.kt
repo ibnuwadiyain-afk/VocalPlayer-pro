@@ -3,6 +3,7 @@ package com.example.vocalplayer.neural
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.example.vocalplayer.dsp.MdxSpectrogramTransformer
 import com.example.vocalplayer.dsp.STFT
 import com.example.vocalplayer.dsp.STFTResult
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,6 +41,7 @@ class NeuralSeparationEngine(
     private var activeProfile: NeuralModelProfile = NeuralModelProfile.DEFAULT_BUILTIN
 
     private var stft = STFT(nFft = config.fftSize, hopLength = config.hopSize)
+    private var mdxTransformer = MdxSpectrogramTransformer(nFft = 4096, hopLength = 1024, dimF = 2048, dimT = 256)
 
     // Performance metrics
     private var rollingRtf = 0.45f
@@ -60,6 +62,16 @@ class NeuralSeparationEngine(
                 activeProfile = NeuralModelProfile.DEFAULT_BUILTIN
                 return false
             }
+            val meta = onnxRunner.getModelMetadata()
+            if (meta != null && meta.isMdxNet) {
+                mdxTransformer = MdxSpectrogramTransformer(
+                    nFft = meta.nFft,
+                    hopLength = meta.hopLength,
+                    dimF = meta.dimF,
+                    dimT = meta.dimT
+                )
+            }
+            Log.i(tag, "Model successfully activated: ${profile.name} (MDX: ${meta?.isMdxNet}, dimF: ${meta?.dimF}, dimT: ${meta?.dimT})")
         } else {
             onnxRunner.closeSession()
         }
@@ -92,6 +104,8 @@ class NeuralSeparationEngine(
         val durationSec = frames.toFloat() / sampleRate.toFloat()
 
         val vocalOutput = FloatArray(totalSamples)
+        val isMdxModel = onnxRunner.isLoaded() &&
+                (onnxRunner.getModelMetadata()?.isMdxNet == true || activeProfile.architecture == ModelArchitecture.MDX_NET)
 
         if (channels == 2) {
             val left = FloatArray(frames)
@@ -101,8 +115,13 @@ class NeuralSeparationEngine(
                 right[i] = inputPcm[i * 2 + 1]
             }
 
-            val vocalLeft = separateChannel(left, sampleRate, isLeft = true, rightChannel = right)
-            val vocalRight = separateChannel(right, sampleRate, isLeft = false, rightChannel = left)
+            val (vocalLeft, vocalRight) = if (isMdxModel) {
+                separateStereoMdx(left, right, sampleRate)
+            } else {
+                val vL = separateChannel(left, sampleRate, isLeft = true, rightChannel = right)
+                val vR = separateChannel(right, sampleRate, isLeft = false, rightChannel = left)
+                Pair(vL, vR)
+            }
 
             // Apply crossfade stitching with previous chunk to avoid boundary clicks
             applyCrossfade(vocalLeft, prevTailLeft)
@@ -117,7 +136,13 @@ class NeuralSeparationEngine(
                 vocalOutput[i * 2 + 1] = vocalRight[i] * config.vocalGain
             }
         } else {
-            val vocalMono = separateChannel(inputPcm, sampleRate, isLeft = true, rightChannel = null)
+            val vocalMono = if (isMdxModel) {
+                val (vL, vR) = separateStereoMdx(inputPcm, inputPcm, sampleRate)
+                FloatArray(frames) { i -> (vL[i] + vR[i]) * 0.5f }
+            } else {
+                separateChannel(inputPcm, sampleRate, isLeft = true, rightChannel = null)
+            }
+
             applyCrossfade(vocalMono, prevTailLeft)
             prevTailLeft = vocalMono.takeLast(crossfadeLength).toFloatArray()
 
@@ -160,13 +185,76 @@ class NeuralSeparationEngine(
         )
     }
 
+    /**
+     * Executes genuine 4-channel UVR MDX-Net ONNX inference.
+     * Computes 4-channel complex STFT, runs onnxRunner inference, and reconstructs stereo audio.
+     */
+    private fun separateStereoMdx(
+        leftAudio: FloatArray,
+        rightAudio: FloatArray,
+        sampleRate: Int
+    ): Pair<FloatArray, FloatArray> {
+        val totalFrames = leftAudio.size
+        val meta = onnxRunner.getModelMetadata()
+        val dimF = meta?.dimF ?: 2048
+        val dimT = meta?.dimT ?: 256
+        val nFft = meta?.nFft ?: 4096
+        val hopLength = meta?.hopLength ?: 1024
+
+        if (mdxTransformer.dimF != dimF || mdxTransformer.dimT != dimT || mdxTransformer.nFft != nFft) {
+            mdxTransformer = MdxSpectrogramTransformer(nFft = nFft, hopLength = hopLength, dimF = dimF, dimT = dimT)
+        }
+
+        val blockSamples = dimT * hopLength
+        if (totalFrames <= blockSamples) {
+            val inputTensor = mdxTransformer.forwardToMdxTensor(leftAudio, rightAudio, startSampleOffset = 0)
+            val outputTensor = onnxRunner.runMdxInference(inputTensor)
+
+            if (outputTensor != null && outputTensor.size == 4 * dimF * dimT) {
+                return mdxTransformer.inverseFromMdxTensor(outputTensor, outputLength = totalFrames, startSampleOffset = 0)
+            }
+        } else {
+            // Block-wise processing with overlap-add for longer segments
+            val resultL = FloatArray(totalFrames)
+            val resultR = FloatArray(totalFrames)
+            var offset = 0
+
+            while (offset < totalFrames) {
+                val curLen = min(blockSamples, totalFrames - offset)
+                val chunkL = leftAudio.copyOfRange(offset, offset + curLen)
+                val chunkR = rightAudio.copyOfRange(offset, offset + curLen)
+
+                val inputTensor = mdxTransformer.forwardToMdxTensor(chunkL, chunkR, startSampleOffset = 0)
+                val outputTensor = onnxRunner.runMdxInference(inputTensor)
+
+                if (outputTensor != null && outputTensor.size == 4 * dimF * dimT) {
+                    val (recL, recR) = mdxTransformer.inverseFromMdxTensor(outputTensor, outputLength = curLen, startSampleOffset = 0)
+                    System.arraycopy(recL, 0, resultL, offset, curLen)
+                    System.arraycopy(recR, 0, resultR, offset, curLen)
+                } else {
+                    val fbL = runBuiltinNeuralSeparator(chunkL, sampleRate, chunkR)
+                    val fbR = runBuiltinNeuralSeparator(chunkR, sampleRate, chunkL)
+                    System.arraycopy(fbL, 0, resultL, offset, curLen)
+                    System.arraycopy(fbR, 0, resultR, offset, curLen)
+                }
+                offset += curLen
+            }
+            return Pair(resultL, resultR)
+        }
+
+        // Fallback to built-in neural separator
+        val fbL = runBuiltinNeuralSeparator(leftAudio, sampleRate, rightAudio)
+        val fbR = runBuiltinNeuralSeparator(rightAudio, sampleRate, leftAudio)
+        return Pair(fbL, fbR)
+    }
+
     private fun separateChannel(
         channelAudio: FloatArray,
         sampleRate: Int,
         isLeft: Boolean,
         rightChannel: FloatArray?
     ): FloatArray {
-        // If an ONNX neural model is loaded, run through ONNX Runtime
+        // If an ONNX neural model is loaded and is not 4-channel MDX-Net, run single channel inference
         if (onnxRunner.isLoaded()) {
             val onnxResult = runOnnxSeparation(channelAudio, sampleRate)
             if (onnxResult != null) return onnxResult
@@ -177,7 +265,7 @@ class NeuralSeparationEngine(
     }
 
     /**
-     * Executes ONNX Runtime tensor inference with dynamic shape mapping.
+     * Executes ONNX Runtime tensor inference for single-channel mask models.
      */
     private fun runOnnxSeparation(channelAudio: FloatArray, sampleRate: Int): FloatArray? {
         val stftResult = stft.forward(channelAudio)

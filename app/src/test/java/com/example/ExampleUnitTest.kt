@@ -25,6 +25,42 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun testPrimitiveFFTForwardAndInverse() {
+    val n = 128
+    val real = FloatArray(n) { i -> sin(2.0 * Math.PI * 5.0 * i / n).toFloat() }
+    val imag = FloatArray(n)
+    val original = real.clone()
+
+    FFT.forward(real, imag, n)
+    FFT.inverse(real, imag, n)
+
+    for (i in 0 until n) {
+      assertEquals(original[i], real[i], 1e-4f)
+      assertEquals(0f, imag[i], 1e-4f)
+    }
+  }
+
+  @Test
+  fun testMdxSpectrogramTransformerTensorShape() {
+    val transformer = com.example.vocalplayer.dsp.MdxSpectrogramTransformer(
+      nFft = 512,
+      hopLength = 128,
+      dimF = 256,
+      dimT = 16
+    )
+    val audioLen = 2048
+    val left = FloatArray(audioLen) { 0.5f }
+    val right = FloatArray(audioLen) { 0.25f }
+
+    val tensor = transformer.forwardToMdxTensor(left, right)
+    assertEquals(4 * 256 * 16, tensor.size)
+
+    val (recL, recR) = transformer.inverseFromMdxTensor(tensor, outputLength = audioLen)
+    assertEquals(audioLen, recL.size)
+    assertEquals(audioLen, recR.size)
+  }
+
+  @Test
   fun testAudioRingBuffer() {
     val buffer = AudioRingBuffer(capacity = 100)
     assertEquals(0, buffer.available())

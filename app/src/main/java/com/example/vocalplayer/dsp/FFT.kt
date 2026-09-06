@@ -32,8 +32,87 @@ data class Complex(val real: Float, val imag: Float) {
 
 /**
  * High-performance Radix-2 Cooley-Tukey Fast Fourier Transform.
+ * Supports both object-based Complex arrays and zero-allocation primitive FloatArrays.
  */
 object FFT {
+
+    /**
+     * In-place Radix-2 Cooley-Tukey forward FFT for separate real and imag FloatArrays.
+     * n must be a power of 2 (e.g. 512, 1024, 2048, 4096).
+     */
+    fun forward(real: FloatArray, imag: FloatArray, n: Int = real.size) {
+        require(n > 0 && (n and (n - 1)) == 0) { "FFT length must be a power of 2, got $n" }
+
+        // Bit-reversal permutation
+        var j = 0
+        for (i in 0 until n - 1) {
+            if (i < j) {
+                val tempR = real[i]; real[i] = real[j]; real[j] = tempR
+                val tempI = imag[i]; imag[i] = imag[j]; imag[j] = tempI
+            }
+            var k = n shr 1
+            while (k <= j) {
+                j -= k
+                k = k shr 1
+            }
+            j += k
+        }
+
+        // Cooley-Tukey butterfly stages
+        var len = 2
+        while (len <= n) {
+            val halfLen = len shr 1
+            val angle = -2.0 * PI / len
+            val wStepR = cos(angle).toFloat()
+            val wStepI = sin(angle).toFloat()
+
+            var i = 0
+            while (i < n) {
+                var wR = 1.0f
+                var wI = 0.0f
+                for (k in 0 until halfLen) {
+                    val uR = real[i + k]
+                    val uI = imag[i + k]
+                    val vR = real[i + k + halfLen] * wR - imag[i + k + halfLen] * wI
+                    val vI = real[i + k + halfLen] * wI + imag[i + k + halfLen] * wR
+
+                    real[i + k] = uR + vR
+                    imag[i + k] = uI + vI
+                    real[i + k + halfLen] = uR - vR
+                    imag[i + k + halfLen] = uI - vI
+
+                    val nextWR = wR * wStepR - wI * wStepI
+                    val nextWI = wR * wStepI + wI * wStepR
+                    wR = nextWR
+                    wI = nextWI
+                }
+                i += len
+            }
+            len = len shl 1
+        }
+    }
+
+    /**
+     * In-place Radix-2 Cooley-Tukey inverse FFT for separate real and imag FloatArrays.
+     * Normalized by 1/n.
+     */
+    fun inverse(real: FloatArray, imag: FloatArray, n: Int = real.size) {
+        require(n > 0 && (n and (n - 1)) == 0) { "iFFT length must be a power of 2, got $n" }
+
+        // Conjugate input: imag = -imag
+        for (i in 0 until n) {
+            imag[i] = -imag[i]
+        }
+
+        forward(real, imag, n)
+
+        // Conjugate output and scale by 1/n
+        val invN = 1.0f / n
+        for (i in 0 until n) {
+            real[i] *= invN
+            imag[i] = -imag[i] * invN
+        }
+    }
 
     /**
      * Compute forward FFT in-place for power-of-2 size array.

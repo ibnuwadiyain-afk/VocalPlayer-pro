@@ -32,7 +32,20 @@ class ModelManager(private val context: Context) {
     private var activeProfile: NeuralModelProfile = NeuralModelProfile.DEFAULT_BUILTIN
 
     init {
+        // Automatically check and stage bundled asset model into secure storage
+        try {
+            downloader.copyAssetModelIfPresent("models/UVR_MDXNET_9482.onnx", NeuralModelProfile.UVR_MDXNET_9482.id)
+        } catch (e: Exception) {
+            Log.d(tag, "Asset model copy check: ${e.message}")
+        }
         loadInstalledModels()
+
+        // If UVR_MDXNET_9482 is available, make it the active profile by default
+        val uvrInstalled = userModels.find { it.id == NeuralModelProfile.UVR_MDXNET_9482.id }
+        if (uvrInstalled != null) {
+            activeProfile = uvrInstalled
+            Log.i(tag, "Default active profile set to UVR_MDXNET_9482: ${uvrInstalled.modelPath}")
+        }
     }
 
     fun loadInstalledModels() {
@@ -41,7 +54,10 @@ class ModelManager(private val context: Context) {
         files.forEach { file ->
             val modelId = "custom_${file.nameWithoutExtension}"
             val matchingPreset = NeuralModelProfile.PRESET_PROFILES.find {
-                downloader.sanitizeModelFileName(it.id) == file.name || it.id == file.nameWithoutExtension
+                downloader.sanitizeModelFileName(it.id) == file.name ||
+                        it.id == file.nameWithoutExtension ||
+                        file.nameWithoutExtension.contains(it.id, ignoreCase = true) ||
+                        (it.id == NeuralModelProfile.UVR_MDXNET_9482.id && file.name.contains("9482", ignoreCase = true))
             }
 
             if (matchingPreset != null) {
@@ -73,9 +89,8 @@ class ModelManager(private val context: Context) {
 
     fun getAllModels(): List<NeuralModelProfile> {
         val list = mutableListOf<NeuralModelProfile>()
-        list.add(NeuralModelProfile.DEFAULT_BUILTIN)
 
-        NeuralModelProfile.PRESET_PROFILES.drop(1).forEach { preset ->
+        NeuralModelProfile.PRESET_PROFILES.forEach { preset ->
             val installed = userModels.find { it.id == preset.id || it.name.equals(preset.name, ignoreCase = true) }
             if (installed != null) {
                 list.add(installed)
