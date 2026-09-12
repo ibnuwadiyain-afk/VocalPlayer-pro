@@ -32,6 +32,8 @@ class OnnxModelRunner(private val context: Context) {
     private val tag = "OnnxModelRunner"
     private var env: OrtEnvironment? = null
     private var session: OrtSession? = null
+    private var vocalsSession: OrtSession? = null
+    private var accompanimentSession: OrtSession? = null
     private var currentModelPath: String? = null
     private var modelMetadata: LoadedModelMetadata? = null
 
@@ -40,6 +42,113 @@ class OnnxModelRunner(private val context: Context) {
             env = OrtEnvironment.getEnvironment()
         } catch (e: Exception) {
             Log.e(tag, "Failed to initialize OrtEnvironment: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Load Spleeter 2-stem ONNX models (vocals and optional accompaniment).
+     */
+    fun loadSpleeterModels(vocalsPath: String, accompanimentPath: String? = null, threadCount: Int = 4): Boolean {
+        return try {
+            val vocalsFile = File(vocalsPath)
+            if (!vocalsFile.exists()) {
+                Log.w(tag, "Spleeter vocals model not found: $vocalsPath")
+                return false
+            }
+
+            closeSession()
+
+            val sessionOptions = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(threadCount)
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+            }
+
+            val currentEnv = env ?: OrtEnvironment.getEnvironment().also { env = it }
+            vocalsSession = currentEnv.createSession(vocalsPath, sessionOptions)
+
+            if (accompanimentPath != null && File(accompanimentPath).exists()) {
+                try {
+                    accompanimentSession = currentEnv.createSession(accompanimentPath, sessionOptions)
+                    Log.i(tag, "Loaded Spleeter accompaniment model: $accompanimentPath")
+                } catch (e: Exception) {
+                    Log.w(tag, "Could not load optional accompaniment model: ${e.message}")
+                }
+            }
+
+            currentModelPath = vocalsPath
+            Log.i(tag, "Successfully initialized Spleeter 2-stem ONNX session (threads: $threadCount)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Error loading Spleeter ONNX models: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Run high-performance Spleeter inference on vocals model.
+     * Input shape: [2, numChunks, 512, 1024]
+     * Output shape: [2, numChunks, 512, 1024]
+     */
+    fun runSpleeterVocals(inputTensorData: FloatArray, numChunks: Int): FloatArray? {
+        val currentSession = vocalsSession ?: session ?: return null
+        val currentEnv = env ?: return null
+        val shape = longArrayOf(2, numChunks.toLong(), 512, 1024)
+
+        return try {
+            val buffer = FloatBuffer.wrap(inputTensorData)
+            val tensor = OnnxTensor.createTensor(currentEnv, buffer, shape)
+            val inputName = currentSession.inputNames.firstOrNull() ?: "x"
+            val results = currentSession.run(mapOf(inputName to tensor))
+
+            val outputTensor = results.get(0) as? OnnxTensor
+            val outputArray: FloatArray? = if (outputTensor != null) {
+                val outBuffer = outputTensor.floatBuffer
+                val arr = FloatArray(outBuffer.remaining())
+                outBuffer.get(arr)
+                arr
+            } else {
+                null
+            }
+
+            tensor.close()
+            results.close()
+            outputArray
+        } catch (e: Exception) {
+            Log.e(tag, "Spleeter vocals ONNX inference error: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Run inference on Spleeter accompaniment model if loaded.
+     */
+    fun runSpleeterAccompaniment(inputTensorData: FloatArray, numChunks: Int): FloatArray? {
+        val currentSession = accompanimentSession ?: return null
+        val currentEnv = env ?: return null
+        val shape = longArrayOf(2, numChunks.toLong(), 512, 1024)
+
+        return try {
+            val buffer = FloatBuffer.wrap(inputTensorData)
+            val tensor = OnnxTensor.createTensor(currentEnv, buffer, shape)
+            val inputName = currentSession.inputNames.firstOrNull() ?: "x"
+            val results = currentSession.run(mapOf(inputName to tensor))
+
+            val outputTensor = results.get(0) as? OnnxTensor
+            val outputArray: FloatArray? = if (outputTensor != null) {
+                val outBuffer = outputTensor.floatBuffer
+                val arr = FloatArray(outBuffer.remaining())
+                outBuffer.get(arr)
+                arr
+            } else {
+                null
+            }
+
+            tensor.close()
+            results.close()
+            outputArray
+        } catch (e: Exception) {
+            Log.e(tag, "Spleeter accompaniment ONNX inference error: ${e.message}", e)
+            null
         }
     }
 
@@ -221,16 +330,22 @@ class OnnxModelRunner(private val context: Context) {
         return result
     }
 
-    fun isLoaded(): Boolean = session != null
+    fun isLoaded(): Boolean = session != null || vocalsSession != null
 
     fun getLoadedModelPath(): String? = currentModelPath
 
     fun getModelMetadata(): LoadedModelMetadata? = modelMetadata
 
+    fun isSpleeterLoaded(): Boolean = vocalsSession != null
+
     fun closeSession() {
         try {
             session?.close()
             session = null
+            vocalsSession?.close()
+            vocalsSession = null
+            accompanimentSession?.close()
+            accompanimentSession = null
             currentModelPath = null
             modelMetadata = null
         } catch (e: Exception) {

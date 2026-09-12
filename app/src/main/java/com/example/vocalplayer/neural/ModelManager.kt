@@ -32,23 +32,38 @@ class ModelManager(private val context: Context) {
     private var activeProfile: NeuralModelProfile = NeuralModelProfile.DEFAULT_BUILTIN
 
     init {
-        // Automatically check and stage bundled asset model into secure storage
+        // Automatically check and stage bundled Spleeter 2-stem asset models into secure storage
         try {
-            downloader.copyAssetModelIfPresent("models/UVR_MDXNET_9482.onnx", NeuralModelProfile.UVR_MDXNET_9482.id)
+            downloader.copyAssetModelIfPresent("models/spleeter_2stems_vocals.onnx", "spleeter_2stems_vocals")
+            downloader.copyAssetModelIfPresent("models/spleeter_2stems_accompaniment.onnx", "spleeter_2stems_accompaniment")
         } catch (e: Exception) {
             Log.d(tag, "Asset model copy check: ${e.message}")
         }
         loadInstalledModels()
 
-        // Default active profile is always the mobile-optimized built-in model for zero-lag real-time playback.
-        // Heavy models (like UVR MDX-Net) remain installed and selectable via the Model Manager.
-        activeProfile = NeuralModelProfile.DEFAULT_BUILTIN
+        // Default active profile is the genuine built-in Spleeter 2-Stem model
+        activeProfile = NeuralModelProfile.SPLEETER_2STEMS
     }
 
     fun loadInstalledModels() {
         userModels.clear()
+
+        // Always register built-in Deezer Spleeter 2-Stem model
+        val vocalsFile = downloader.getSecureModelFile("spleeter_2stems_vocals")
+        val accFile = downloader.getSecureModelFile("spleeter_2stems_accompaniment")
+        val spleeterProfile = NeuralModelProfile.SPLEETER_2STEMS.copy(
+            modelPath = if (vocalsFile.exists()) vocalsFile.absolutePath else null,
+            accompanimentModelPath = if (accFile.exists()) accFile.absolutePath else null,
+            isDownloaded = true,
+            fileSizeFormatted = if (vocalsFile.exists()) "${vocalsFile.length() / (1024 * 1024)} MB (Built-in)" else "26 MB (Built-in)"
+        )
+        userModels.add(spleeterProfile)
+
         val files = downloader.listSecureModels()
         files.forEach { file ->
+            if (file.name.contains("spleeter_2stems", ignoreCase = true)) {
+                return@forEach // Already handled as built-in
+            }
             val modelId = "custom_${file.nameWithoutExtension}"
             val matchingPreset = NeuralModelProfile.PRESET_PROFILES.find {
                 downloader.sanitizeModelFileName(it.id) == file.name ||

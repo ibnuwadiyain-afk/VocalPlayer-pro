@@ -74,6 +74,116 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun testSpleeterModelLoading() {
+    val file = java.io.File("/tmp/spleeter_int8/sherpa-onnx-spleeter-2stems-int8/vocals.int8.onnx")
+    if (!file.exists()) return
+    val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+    val session = env.createSession(file.absolutePath)
+    println("Spleeter Inputs: " + session.inputNames)
+    for (name in session.inputNames) {
+      val info = session.inputInfo[name]?.info as? ai.onnxruntime.TensorInfo
+      println("Input $name shape: " + info?.shape?.contentToString() + " type: " + info?.type)
+    }
+    println("Spleeter Outputs: " + session.outputNames)
+    for (name in session.outputNames) {
+      val info = session.outputInfo[name]?.info as? ai.onnxruntime.TensorInfo
+      println("Output $name shape: " + info?.shape?.contentToString() + " type: " + info?.type)
+    }
+
+    // Benchmark 1 chunk: shape [2, 1, 512, 1024] = 11.88 seconds of audio!
+    val dummyInput = FloatArray(2 * 1 * 512 * 1024) { 0.1f }
+    val buffer = java.nio.FloatBuffer.wrap(dummyInput)
+    val tensor = ai.onnxruntime.OnnxTensor.createTensor(env, buffer, longArrayOf(2, 1, 512, 1024))
+    val startTime = System.currentTimeMillis()
+    val results = session.run(mapOf("x" to tensor))
+    val elapsed = System.currentTimeMillis() - startTime
+    val outTensor = results.get(0) as ai.onnxruntime.OnnxTensor
+    println("Spleeter inference time for 11.88s of audio: ${elapsed}ms (RTF = ${elapsed / 11880.0})")
+    tensor.close()
+    results.close()
+    session.close()
+  }
+
+  @Test
+  fun testSpleeterTransformerRoundTrip() {
+    val transformer = com.example.vocalplayer.dsp.SpleeterSpectrogramTransformer()
+    val length = 44100 // 1 second of audio
+    val left = FloatArray(length) { i -> sin(2.0 * Math.PI * 440.0 * i / 44100.0).toFloat() * 0.8f }
+    val right = FloatArray(length) { i -> sin(2.0 * Math.PI * 880.0 * i / 44100.0).toFloat() * 0.8f }
+
+    val stftData = transformer.forwardToSpleeterTensor(left, right)
+    assertEquals(1, stftData.numChunks)
+
+    // With unit mask (vocalsOutput = mixMag, accOutput = 0), reconstruction should be faithful
+    val (recL, recR) = transformer.inverseFromSpleeterTensor(
+      stftData = stftData,
+      vocalsOutput = stftData.magTensor,
+      accompanimentOutput = FloatArray(stftData.magTensor.size),
+      targetLength = length,
+      vocalMaskStrength = 1.0f
+    )
+
+    assertEquals(length, recL.size)
+    assertEquals(length, recR.size)
+
+    // Verify correlation / signal energy preserved
+    var energyL = 0.0
+    for (i in 4096 until length - 4096) {
+      val diff = left[i] - recL[i]
+      energyL += diff * diff
+    }
+    val rmse = Math.sqrt(energyL / (length - 8192))
+    println("Spleeter roundtrip RMSE: $rmse")
+    org.junit.Assert.assertTrue("RMSE should be low: $rmse", rmse < 0.1)
+  }
+
+  @Test
+  fun testSpleeterModelInferenceFullAudio() {
+    val modelFile = java.io.File("src/main/assets/models/spleeter_2stems_vocals.onnx")
+    org.junit.Assume.assumeTrue(modelFile.exists())
+
+    val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+    val session = env.createSession(modelFile.absolutePath)
+    val transformer = com.example.vocalplayer.dsp.SpleeterSpectrogramTransformer()
+
+    val length = 44100 * 2 // 2 seconds of stereo audio
+    val left = FloatArray(length) { i -> sin(2.0 * Math.PI * 440.0 * i / 44100.0).toFloat() * 0.7f }
+    val right = FloatArray(length) { i -> sin(2.0 * Math.PI * 880.0 * i / 44100.0).toFloat() * 0.7f }
+
+    val stftData = transformer.forwardToSpleeterTensor(left, right)
+    val buffer = java.nio.FloatBuffer.wrap(stftData.magTensor)
+    val shape = longArrayOf(2, stftData.numChunks.toLong(), 512, 1024)
+    val tensor = ai.onnxruntime.OnnxTensor.createTensor(env, buffer, shape)
+
+    val start = System.currentTimeMillis()
+    val results = session.run(mapOf("x" to tensor))
+    val elapsed = System.currentTimeMillis() - start
+
+    val outTensor = results.get(0) as ai.onnxruntime.OnnxTensor
+    val outBuffer = outTensor.floatBuffer
+    val vocalsOutput = FloatArray(outBuffer.remaining())
+    outBuffer.get(vocalsOutput)
+
+    println("Inference for 2s audio took ${elapsed}ms")
+
+    val (recL, recR) = transformer.inverseFromSpleeterTensor(
+      stftData = stftData,
+      vocalsOutput = vocalsOutput,
+      accompanimentOutput = null,
+      targetLength = length,
+      vocalMaskStrength = 1.0f
+    )
+
+    assertEquals(length, recL.size)
+    assertEquals(length, recR.size)
+
+    tensor.close()
+    results.close()
+    session.close()
+    env.close()
+  }
+
+  @Test
   fun testAudioRingBuffer() {
     val buffer = AudioRingBuffer(capacity = 100)
     assertEquals(0, buffer.available())
