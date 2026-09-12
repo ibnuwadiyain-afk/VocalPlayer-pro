@@ -34,6 +34,7 @@ class OnnxModelRunner(private val context: Context) {
     private var session: OrtSession? = null
     private var vocalsSession: OrtSession? = null
     private var accompanimentSession: OrtSession? = null
+    private var demucsSession: OrtSession? = null
     private var currentModelPath: String? = null
     private var modelMetadata: LoadedModelMetadata? = null
 
@@ -330,13 +331,84 @@ class OnnxModelRunner(private val context: Context) {
         return result
     }
 
-    fun isLoaded(): Boolean = session != null || vocalsSession != null
+    fun isLoaded(): Boolean = session != null || vocalsSession != null || demucsSession != null
 
     fun getLoadedModelPath(): String? = currentModelPath
 
     fun getModelMetadata(): LoadedModelMetadata? = modelMetadata
 
     fun isSpleeterLoaded(): Boolean = vocalsSession != null
+
+    fun isDemucsLoaded(): Boolean = demucsSession != null
+
+    /**
+     * Load Demucs Hybrid Transformer INT8 quantized ONNX model.
+     */
+    fun loadDemucsModel(modelPath: String, threadCount: Int = 4): Boolean {
+        return try {
+            val file = File(modelPath)
+            if (!file.exists()) {
+                Log.w(tag, "Demucs model file not found: $modelPath")
+                return false
+            }
+
+            demucsSession?.close()
+            val sessionOptions = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(threadCount)
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+            }
+            val currentEnv = env ?: OrtEnvironment.getEnvironment().also { env = it }
+            demucsSession = currentEnv.createSession(modelPath, sessionOptions)
+            currentModelPath = modelPath
+            Log.i(tag, "Successfully loaded Demucs ONNX model: $modelPath (threads: $threadCount)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to load Demucs ONNX model: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Run inference on Demucs model.
+     * mix: [1, 2, 343980]
+     * mag: [1, 4, 2048, 336]
+     * Returns output wav tensor: [1, 4, 2, 343980] where source 3 is vocals.
+     */
+    fun runDemucs(mixTensorData: FloatArray, magTensorData: FloatArray): FloatArray? {
+        val currentSession = demucsSession ?: session ?: return null
+        val currentEnv = env ?: return null
+
+        val mixShape = longArrayOf(1, 2, 343980)
+        val magShape = longArrayOf(1, 4, 2048, 336)
+
+        return try {
+            val mixBuffer = FloatBuffer.wrap(mixTensorData)
+            val magBuffer = FloatBuffer.wrap(magTensorData)
+
+            val mixTensor = OnnxTensor.createTensor(currentEnv, mixBuffer, mixShape)
+            val magTensor = OnnxTensor.createTensor(currentEnv, magBuffer, magShape)
+
+            val inputMap = mapOf("mix" to mixTensor, "mag" to magTensor)
+            val results = currentSession.run(inputMap)
+
+            // Output index 1 is wav: [1, 4, 2, 343980]
+            val wavTensor = (results.get(1) as? OnnxTensor) ?: (results.get(0) as? OnnxTensor)
+            val outputArray: FloatArray? = if (wavTensor != null) {
+                val outBuffer = wavTensor.floatBuffer
+                val arr = FloatArray(outBuffer.remaining())
+                outBuffer.get(arr)
+                arr
+            } else null
+
+            mixTensor.close()
+            magTensor.close()
+            results.close()
+            outputArray
+        } catch (e: Exception) {
+            Log.e(tag, "Demucs ONNX inference error: ${e.message}", e)
+            null
+        }
+    }
 
     fun closeSession() {
         try {
@@ -346,6 +418,8 @@ class OnnxModelRunner(private val context: Context) {
             vocalsSession = null
             accompanimentSession?.close()
             accompanimentSession = null
+            demucsSession?.close()
+            demucsSession = null
             currentModelPath = null
             modelMetadata = null
         } catch (e: Exception) {

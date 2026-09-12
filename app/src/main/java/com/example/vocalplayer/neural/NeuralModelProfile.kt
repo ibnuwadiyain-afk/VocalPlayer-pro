@@ -31,11 +31,25 @@ data class NeuralModelProfile(
     val isDownloaded: Boolean = false
 ) {
     companion object {
+        val DEMUCS_INT8 = NeuralModelProfile(
+            id = "demucs_v4_int8",
+            name = "Demucs v4 (Quantized INT8)",
+            architecture = ModelArchitecture.DEMUCS_WAVE,
+            description = "State-of-the-art Demucs v4 Hybrid Transformer with dynamic INT8 quantization. Processes offline into cache for 0ms lag-free playback.",
+            sampleRate = 44100,
+            isStereo = true,
+            isBuiltIn = true,
+            fileSizeFormatted = "80 MB (Quantized INT8 Built-in)",
+            latencyEstimateMs = 0,
+            recommendedMode = SeparationMode.QUALITY,
+            isDownloaded = true
+        )
+
         val SPLEETER_2STEMS = NeuralModelProfile(
             id = "spleeter_2stems",
             name = "Deezer Spleeter 2-Stem",
             architecture = ModelArchitecture.SPLEETER_2STEM,
-            description = "True genuine Deezer Spleeter 2-stem neural separation engine. High-fidelity vocal extraction with near-zero latency (RTF 0.015).",
+            description = "True genuine Deezer Spleeter 2-stem neural separation engine. High-fidelity vocal extraction with fast offline caching.",
             sampleRate = 44100,
             isStereo = true,
             isBuiltIn = true,
@@ -45,7 +59,7 @@ data class NeuralModelProfile(
             isDownloaded = true
         )
 
-        val DEFAULT_BUILTIN = SPLEETER_2STEMS
+        val DEFAULT_BUILTIN = DEMUCS_INT8
 
         val UVR_MDXNET_9482 = NeuralModelProfile(
             id = "uvr_mdxnet_9482",
@@ -65,6 +79,7 @@ data class NeuralModelProfile(
         )
 
         val PRESET_PROFILES = listOf(
+            DEMUCS_INT8,
             SPLEETER_2STEMS,
             UVR_MDXNET_9482,
             NeuralModelProfile(

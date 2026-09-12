@@ -34,15 +34,17 @@ import kotlinx.coroutines.launch
 @OptIn(UnstableApi::class)
 class VocalVideoPlayer(private val context: Context) {
 
+    val cacheManager = com.example.vocalplayer.cache.VocalCacheManager(context)
     private val modelManager = ModelManager(context)
-    private val sampleClipsManager = SampleClipsManager(context)
+    private val sampleClipsManager = SampleClipsManager(context, cacheManager)
+    val offlineVocalSeparator = com.example.vocalplayer.neural.OfflineVocalSeparator(context, cacheManager, modelManager)
 
     private val separationEngine = NeuralSeparationEngine(
         context = context,
         config = SeparationConfig(mode = SeparationMode.PERFORMANCE)
     )
 
-    private val audioProcessor = NeuralAudioProcessor(separationEngine)
+    private val audioProcessor = NeuralAudioProcessor(separationEngine, cacheManager)
 
     val exoPlayer: ExoPlayer
 
@@ -50,6 +52,7 @@ class VocalVideoPlayer(private val context: Context) {
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
     private var progressTrackerJob: Job? = null
+    private var extractionJob: Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     init {
@@ -80,6 +83,7 @@ class VocalVideoPlayer(private val context: Context) {
             .setLoadControl(loadControl)
             .build()
 
+        audioProcessor.positionMsProvider = { exoPlayer.currentPosition }
         audioProcessor.isVocalOnlyEnabled = false
 
         setupPlayerListeners()
@@ -199,6 +203,9 @@ class VocalVideoPlayer(private val context: Context) {
 
     fun loadMedia(uri: Uri, title: String? = null) {
         val resolvedTitle = title ?: resolveFileName(uri) ?: "Local Media File"
+        audioProcessor.activeMediaUri = uri
+        val isCached = cacheManager.isVocalCached(uri)
+
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
@@ -209,7 +216,81 @@ class VocalVideoPlayer(private val context: Context) {
                 mediaUri = uri,
                 mediaTitle = resolvedTitle,
                 hasMediaLoaded = true,
-                currentPositionMs = 0L
+                currentPositionMs = 0L,
+                isVocalCached = isCached,
+                cacheSizeMb = cacheManager.getCacheSizeMb(),
+                statusMessage = if (isCached) "Demucs Vocals Loaded (0ms Lag Cached Playback)" else null
+            )
+        }
+
+        // If not cached yet, start background offline Demucs extraction
+        if (!isCached) {
+            extractVocalsOffline(uri)
+        }
+    }
+
+    fun extractVocalsOffline(targetUri: Uri? = null) {
+        val uri = targetUri ?: _uiState.value.mediaUri ?: return
+        if (cacheManager.isVocalCached(uri)) {
+            _uiState.update {
+                it.copy(
+                    isVocalCached = true,
+                    statusMessage = "Demucs Vocals already cached (0ms Lag)"
+                )
+            }
+            return
+        }
+
+        extractionJob?.cancel()
+        extractionJob = scope.launch {
+            _uiState.update {
+                it.copy(
+                    isExtractingVocals = true,
+                    extractionStage = "Starting Demucs offline isolation...",
+                    extractionProgress = 0.0f
+                )
+            }
+
+            val success = offlineVocalSeparator.extractAndCacheVocals(uri) { prog ->
+                _uiState.update {
+                    it.copy(
+                        extractionStage = prog.stage,
+                        extractionProgress = prog.progress
+                    )
+                }
+            }
+
+            _uiState.update {
+                it.copy(
+                    isExtractingVocals = false,
+                    isVocalCached = success,
+                    cacheSizeMb = cacheManager.getCacheSizeMb(),
+                    statusMessage = if (success) "Demucs Vocals Cached! 0ms Lag-Free Playback Ready" else "Demucs extraction error"
+                )
+            }
+        }
+    }
+
+    fun cancelVocalExtraction() {
+        extractionJob?.cancel()
+        extractionJob = null
+        _uiState.update {
+            it.copy(
+                isExtractingVocals = false,
+                extractionStage = null,
+                statusMessage = "Vocal extraction cancelled"
+            )
+        }
+    }
+
+    fun clearVocalCache() {
+        val freed = cacheManager.clearCache()
+        val currentUri = _uiState.value.mediaUri
+        _uiState.update {
+            it.copy(
+                isVocalCached = if (currentUri != null) cacheManager.isVocalCached(currentUri) else false,
+                cacheSizeMb = 0.0f,
+                statusMessage = "Cleared ${freed / (1024 * 1024)} MB vocal cache"
             )
         }
     }
@@ -359,7 +440,10 @@ class VocalVideoPlayer(private val context: Context) {
 
     fun release() {
         stopProgressTracker()
+        cancelVocalExtraction()
         exoPlayer.release()
+        audioProcessor.activeMediaUri = null
         separationEngine.release()
+        offlineVocalSeparator.release()
     }
 }

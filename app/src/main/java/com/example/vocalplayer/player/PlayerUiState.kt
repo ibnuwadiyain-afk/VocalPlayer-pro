@@ -25,6 +25,13 @@ data class PlayerUiState(
     val isBuffering: Boolean = false,
     val hasMediaLoaded: Boolean = false,
 
+    // Offline Demucs Vocal Extraction & Caching state
+    val isVocalCached: Boolean = false,
+    val isExtractingVocals: Boolean = false,
+    val extractionStage: String? = null,
+    val extractionProgress: Float = 0.0f,
+    val cacheSizeMb: Float = 0.0f,
+
     // Real-time neural processing telemetry
     val rtf: Float = 0.42f,
     val latencyMs: Long = 28L,

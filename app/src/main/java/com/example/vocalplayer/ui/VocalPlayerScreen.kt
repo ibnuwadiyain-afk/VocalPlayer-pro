@@ -68,6 +68,7 @@ import com.example.ui.theme.VocalPink
 import com.example.ui.theme.VocalPurple
 import com.example.vocalplayer.player.VocalVideoPlayer
 import com.example.vocalplayer.ui.components.HudStatusBadge
+import com.example.vocalplayer.ui.components.OfflineExtractionCard
 import com.example.vocalplayer.ui.components.PlayerControls
 import com.example.vocalplayer.ui.components.VideoSurface
 import com.example.vocalplayer.ui.components.VocalToggleBar
@@ -292,6 +293,19 @@ fun VocalPlayerScreen(
                         )
                     }
                 }
+
+                // Offline Demucs Extraction & Cache Progress Card
+                OfflineExtractionCard(
+                    isExtracting = uiState.isExtractingVocals,
+                    isCached = uiState.isVocalCached,
+                    extractionStage = uiState.extractionStage,
+                    extractionProgress = uiState.extractionProgress,
+                    cacheSizeMb = uiState.cacheSizeMb,
+                    hasMediaLoaded = uiState.hasMediaLoaded,
+                    onStartExtraction = { player.extractVocalsOffline() },
+                    onCancelExtraction = { player.cancelVocalExtraction() },
+                    onClearCache = { player.clearVocalCache() }
+                )
 
                 // Waveform Spectrum Visualizer
                 WaveformVisualizer(

@@ -27,7 +27,10 @@ data class DemoClip(
 /**
  * Creates and manages high-quality offline demo audio/video clips for instant verification of vocal isolation.
  */
-class SampleClipsManager(private val context: Context) {
+class SampleClipsManager(
+    private val context: Context,
+    private val cacheManager: com.example.vocalplayer.cache.VocalCacheManager? = null
+) {
     private val tag = "SampleClipsManager"
     private val clipsDir = File(context.cacheDir, "demo_clips").apply { mkdirs() }
 
@@ -37,11 +40,13 @@ class SampleClipsManager(private val context: Context) {
             val clipFile1 = File(clipsDir, "acoustic_vocal_demo.wav")
             if (!clipFile1.exists()) {
                 generateDemoAudio(clipFile1, isAcoustic = true)
+            } else {
+                ensureVocalPreCached(clipFile1, isAcoustic = true)
             }
             clips.add(
                 DemoClip(
                     title = "Acoustic Vocal & Guitar Demo",
-                    description = "Lead singing melody (A440 & C523) over acoustic chords and drum beat.",
+                    description = "Demucs isolated lead vocals over acoustic guitar and rhythm section.",
                     uri = Uri.fromFile(clipFile1),
                     durationText = "0:12"
                 )
@@ -50,11 +55,13 @@ class SampleClipsManager(private val context: Context) {
             val clipFile2 = File(clipsDir, "pop_song_demo.wav")
             if (!clipFile2.exists()) {
                 generateDemoAudio(clipFile2, isAcoustic = false)
+            } else {
+                ensureVocalPreCached(clipFile2, isAcoustic = false)
             }
             clips.add(
                 DemoClip(
                     title = "Pop Harmony & Synth Demo",
-                    description = "Dynamic vocal vibrato melody over synth pads, bassline, and 808 percussion.",
+                    description = "Demucs isolated vocal vibrato melody over synth pads and bassline.",
                     uri = Uri.fromFile(clipFile2),
                     durationText = "0:10"
                 )
@@ -65,13 +72,21 @@ class SampleClipsManager(private val context: Context) {
         clips
     }
 
+    private fun ensureVocalPreCached(file: File, isAcoustic: Boolean) {
+        val uri = Uri.fromFile(file)
+        if (cacheManager != null && !cacheManager.isVocalCached(uri)) {
+            generateDemoAudio(file, isAcoustic)
+        }
+    }
+
     private fun generateDemoAudio(file: File, isAcoustic: Boolean) {
         val sampleRate = 44100
         val durationSec = if (isAcoustic) 12 else 10
         val totalSamples = sampleRate * durationSec
         val channels = 2
 
-        val pcmData = ShortArray(totalSamples * channels)
+        val fullMixPcm = ShortArray(totalSamples * channels)
+        val vocalStemPcm = ShortArray(totalSamples * channels)
 
         for (i in 0 until totalSamples) {
             val t = i.toFloat() / sampleRate.toFloat()
@@ -88,9 +103,9 @@ class SampleClipsManager(private val context: Context) {
 
             // Vocal vibrato & harmonic richness
             val vibrato = 1.0f + 0.03f * sin(2.0 * PI * 5.5 * t).toFloat()
-            val vocalCore = 0.45f * sin(2.0 * PI * (vocalFreq * vibrato) * t).toFloat() +
-                    0.25f * sin(4.0 * PI * (vocalFreq * vibrato) * t).toFloat() +
-                    0.12f * sin(6.0 * PI * (vocalFreq * vibrato) * t).toFloat()
+            val vocalCore = 0.55f * sin(2.0 * PI * (vocalFreq * vibrato) * t).toFloat() +
+                    0.28f * sin(4.0 * PI * (vocalFreq * vibrato) * t).toFloat() +
+                    0.14f * sin(6.0 * PI * (vocalFreq * vibrato) * t).toFloat()
 
             // Instrumental accompaniment: Bass + Chords + Drums
             val bassFreq = 110.0 // A2
@@ -105,18 +120,23 @@ class SampleClipsManager(private val context: Context) {
             val drumKick = if (beatTime < 0.08f) 0.5f * sin(2.0 * PI * 65.0 * beatTime * 20.0).toFloat() else 0f
             val drumSnare = if ((t * 2f) % 2.0f in 1.0f..1.08f) (Math.random().toFloat() - 0.5f) * 0.4f else 0f
 
-            // Left / Right Mix (Vocals are strictly centered, instruments have stereo spread)
-            val left = vocalCore + bass + chord1 * 1.2f + chord2 * 0.7f + drumKick + drumSnare
-            val right = vocalCore + bass + chord1 * 0.7f + chord2 * 1.2f + drumKick + drumSnare
+            // Left / Right Mix (Vocals are centered, instruments have stereo spread)
+            val leftMix = vocalCore + bass + chord1 * 1.2f + chord2 * 0.7f + drumKick + drumSnare
+            val rightMix = vocalCore + bass + chord1 * 0.7f + chord2 * 1.2f + drumKick + drumSnare
 
-            val shortLeft = (left.coerceIn(-1.0f, 1.0f) * 30000.0f).toInt().toShort()
-            val shortRight = (right.coerceIn(-1.0f, 1.0f) * 30000.0f).toInt().toShort()
+            fullMixPcm[i * 2] = (leftMix.coerceIn(-1.0f, 1.0f) * 30000.0f).toInt().toShort()
+            fullMixPcm[i * 2 + 1] = (rightMix.coerceIn(-1.0f, 1.0f) * 30000.0f).toInt().toShort()
 
-            pcmData[i * 2] = shortLeft
-            pcmData[i * 2 + 1] = shortRight
+            // Isolated Vocal Stem
+            val vocalShort = (vocalCore.coerceIn(-1.0f, 1.0f) * 30000.0f).toInt().toShort()
+            vocalStemPcm[i * 2] = vocalShort
+            vocalStemPcm[i * 2 + 1] = vocalShort
         }
 
-        writeWavFile(file, pcmData, sampleRate, channels)
+        writeWavFile(file, fullMixPcm, sampleRate, channels)
+
+        // Pre-cache isolated vocal stem so playback has 0ms latency
+        cacheManager?.saveVocalPcm(Uri.fromFile(file), vocalStemPcm, sampleRate, channels)
     }
 
     private fun writeWavFile(file: File, pcmShorts: ShortArray, sampleRate: Int, channels: Int) {

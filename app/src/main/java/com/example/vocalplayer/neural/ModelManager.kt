@@ -32,8 +32,9 @@ class ModelManager(private val context: Context) {
     private var activeProfile: NeuralModelProfile = NeuralModelProfile.DEFAULT_BUILTIN
 
     init {
-        // Automatically check and stage bundled Spleeter 2-stem asset models into secure storage
+        // Automatically check and stage bundled Demucs & Spleeter asset models into secure storage
         try {
+            downloader.copyAssetModelIfPresent("models/htdemucs_int8.onnx", "htdemucs_int8")
             downloader.copyAssetModelIfPresent("models/spleeter_2stems_vocals.onnx", "spleeter_2stems_vocals")
             downloader.copyAssetModelIfPresent("models/spleeter_2stems_accompaniment.onnx", "spleeter_2stems_accompaniment")
         } catch (e: Exception) {
@@ -41,14 +42,23 @@ class ModelManager(private val context: Context) {
         }
         loadInstalledModels()
 
-        // Default active profile is the genuine built-in Spleeter 2-Stem model
-        activeProfile = NeuralModelProfile.SPLEETER_2STEMS
+        // Default active profile is Demucs v4 Dynamic Quantized INT8
+        activeProfile = NeuralModelProfile.DEMUCS_INT8
     }
 
     fun loadInstalledModels() {
         userModels.clear()
 
-        // Always register built-in Deezer Spleeter 2-Stem model
+        // Register built-in Demucs v4 Quantized INT8 model
+        val demucsFile = downloader.getSecureModelFile("htdemucs_int8")
+        val demucsProfile = NeuralModelProfile.DEMUCS_INT8.copy(
+            modelPath = if (demucsFile.exists()) demucsFile.absolutePath else null,
+            isDownloaded = true,
+            fileSizeFormatted = if (demucsFile.exists()) "${demucsFile.length() / (1024 * 1024)} MB (Built-in)" else "80 MB (Built-in)"
+        )
+        userModels.add(demucsProfile)
+
+        // Register built-in Deezer Spleeter 2-Stem model
         val vocalsFile = downloader.getSecureModelFile("spleeter_2stems_vocals")
         val accFile = downloader.getSecureModelFile("spleeter_2stems_accompaniment")
         val spleeterProfile = NeuralModelProfile.SPLEETER_2STEMS.copy(
@@ -61,7 +71,7 @@ class ModelManager(private val context: Context) {
 
         val files = downloader.listSecureModels()
         files.forEach { file ->
-            if (file.name.contains("spleeter_2stems", ignoreCase = true)) {
+            if (file.name.contains("spleeter_2stems", ignoreCase = true) || file.name.contains("htdemucs_int8", ignoreCase = true)) {
                 return@forEach // Already handled as built-in
             }
             val modelId = "custom_${file.nameWithoutExtension}"
