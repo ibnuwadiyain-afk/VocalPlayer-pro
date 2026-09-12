@@ -40,12 +40,9 @@ class ModelManager(private val context: Context) {
         }
         loadInstalledModels()
 
-        // If UVR_MDXNET_9482 is available, make it the active profile by default
-        val uvrInstalled = userModels.find { it.id == NeuralModelProfile.UVR_MDXNET_9482.id }
-        if (uvrInstalled != null) {
-            activeProfile = uvrInstalled
-            Log.i(tag, "Default active profile set to UVR_MDXNET_9482: ${uvrInstalled.modelPath}")
-        }
+        // Default active profile is always the mobile-optimized built-in model for zero-lag real-time playback.
+        // Heavy models (like UVR MDX-Net) remain installed and selectable via the Model Manager.
+        activeProfile = NeuralModelProfile.DEFAULT_BUILTIN
     }
 
     fun loadInstalledModels() {

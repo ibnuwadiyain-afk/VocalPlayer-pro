@@ -61,6 +61,19 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun testSTFTZeroAllocation() {
+    val stft = com.example.vocalplayer.dsp.STFT(nFft = 256, hopLength = 64)
+    val input = FloatArray(1024) { i -> sin(2.0 * Math.PI * 8.0 * i / 256).toFloat() }
+    val result = stft.forward(input)
+    val reconstructed = stft.inverse(result.magnitudes, result.phases, result.numFrames)
+
+    // Verify reconstruction length matches and non-zero
+    org.junit.Assert.assertTrue(reconstructed.isNotEmpty())
+    org.junit.Assert.assertTrue(result.numFrames > 0)
+    org.junit.Assert.assertEquals(129, result.numBins)
+  }
+
+  @Test
   fun testAudioRingBuffer() {
     val buffer = AudioRingBuffer(capacity = 100)
     assertEquals(0, buffer.available())

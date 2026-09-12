@@ -39,7 +39,7 @@ class VocalVideoPlayer(private val context: Context) {
 
     private val separationEngine = NeuralSeparationEngine(
         context = context,
-        config = SeparationConfig(mode = SeparationMode.BALANCED)
+        config = SeparationConfig(mode = SeparationMode.PERFORMANCE)
     )
 
     private val audioProcessor = NeuralAudioProcessor(separationEngine)
@@ -53,7 +53,7 @@ class VocalVideoPlayer(private val context: Context) {
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     init {
-        // Setup Media3 ExoPlayer with our custom neural audio processing sink
+        // Setup Media3 ExoPlayer with our custom neural audio processing sink and optimized LoadControl
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 context: Context,
@@ -66,7 +66,21 @@ class VocalVideoPlayer(private val context: Context) {
             }
         }
 
-        exoPlayer = ExoPlayer.Builder(context, renderersFactory).build()
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 1500,
+                /* maxBufferMs = */ 30000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 1000
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        exoPlayer = ExoPlayer.Builder(context, renderersFactory)
+            .setLoadControl(loadControl)
+            .build()
+
+        audioProcessor.isVocalOnlyEnabled = false
 
         setupPlayerListeners()
         setupAudioProcessorMetrics()

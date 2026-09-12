@@ -21,7 +21,7 @@ class NeuralAudioProcessor(
 ) : BaseAudioProcessor() {
 
     @Volatile
-    var isVocalOnlyEnabled: Boolean = true
+    var isVocalOnlyEnabled: Boolean = false
 
     @Volatile
     var vocalMixRatio: Float = 1.0f // 1.0f = pure vocal stem, 0.0f = original audio
@@ -30,12 +30,18 @@ class NeuralAudioProcessor(
     var onMetricsUpdated: ((rtf: Float, latencyMs: Long, vocalEnergy: Float, instEnergy: Float, bufferHealth: Float) -> Unit)? = null
 
     private val ringBuffer = AudioRingBuffer(capacity = 44100 * 2) // ~1 sec stereo float buffer
-    private var chunkAccumulator = FloatArray(4096)
-    private var accumulatorCount = 0
+
+    // Preallocated scratch buffers to eliminate GC allocations during playback
+    private var floatSamples = FloatArray(16384)
+    private var shorts = ShortArray(16384)
+    private var blendedOutput = FloatArray(16384)
 
     // Transition smoothing for toggle
-    private var currentMixAlpha = 1.0f
-    private var targetMixAlpha = 1.0f
+    private var currentMixAlpha = 0.0f
+    private var targetMixAlpha = 0.0f
+
+    // UI telemetry rate limiting to avoid flooding Compose recomposition
+    private var lastMetricsUpdateTime = 0L
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         // We support PCM 16-bit encoding
@@ -49,74 +55,77 @@ class NeuralAudioProcessor(
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
 
+        // Target mix alpha based on toggle state
+        targetMixAlpha = if (isVocalOnlyEnabled) vocalMixRatio else 0.0f
+
+        // FAST PATH: When vocal isolation is disabled and transition complete, direct zero-copy pass-through
+        if (targetMixAlpha <= 0.001f && currentMixAlpha <= 0.001f) {
+            currentMixAlpha = 0.0f
+            val outputBuffer = replaceOutputBuffer(remaining)
+            outputBuffer.put(inputBuffer)
+            outputBuffer.flip()
+            return
+        }
+
         val sampleRate = inputAudioFormat.sampleRate
         val channelCount = inputAudioFormat.channelCount
         val sampleCount = remaining / 2 // 16-bit = 2 bytes per sample
 
-        // Target mix alpha based on toggle state
-        targetMixAlpha = if (isVocalOnlyEnabled) vocalMixRatio else 0.0f
-
-        // Convert PCM 16-bit to float [-1.0, 1.0]
-        val floatSamples = FloatArray(sampleCount)
-        val shortBuffer = inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        val shorts = ShortArray(sampleCount)
-        shortBuffer.get(shorts)
-        inputBuffer.position(inputBuffer.position() + remaining)
-
-        for (i in 0 until sampleCount) {
-            floatSamples[i] = shorts[i] / 32768.0f
+        // Ensure scratch buffers are large enough
+        if (sampleCount > floatSamples.size) {
+            floatSamples = FloatArray(sampleCount * 2)
+            shorts = ShortArray(sampleCount * 2)
+            blendedOutput = FloatArray(sampleCount * 2)
         }
 
-        // Process audio
-        val outputFloat = if (targetMixAlpha > 0.01f || currentMixAlpha > 0.01f) {
-            processNeuralSeparation(floatSamples, sampleRate, channelCount)
-        } else {
-            currentMixAlpha = 0.0f
-            floatSamples
+        // Convert PCM 16-bit to float [-1.0, 1.0] using scratch arrays
+        val shortBuffer = inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        shortBuffer.get(shorts, 0, sampleCount)
+        inputBuffer.position(inputBuffer.position() + remaining)
+
+        val inv32768 = 1.0f / 32768.0f
+        for (i in 0 until sampleCount) {
+            floatSamples[i] = shorts[i] * inv32768
+        }
+
+        // Process vocal separation
+        val inputSlice = if (floatSamples.size == sampleCount) floatSamples else floatSamples.copyOf(sampleCount)
+        val result: SeparationResult = separationEngine.separateChunk(inputSlice, sampleRate, channelCount)
+
+        // Smooth transition crossfade
+        val stepAlpha = (targetMixAlpha - currentMixAlpha) / sampleCount.toFloat()
+        for (i in 0 until sampleCount) {
+            currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
+            blendedOutput[i] = (1.0f - currentMixAlpha) * result.originalAudio[i] + currentMixAlpha * result.vocalAudio[i]
+        }
+
+        // Throttled UI telemetry update to prevent UI recomposition spam
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastMetricsUpdateTime >= 120L) {
+            lastMetricsUpdateTime = now
+            onMetricsUpdated?.invoke(
+                result.rtf,
+                result.processingTimeMs,
+                result.vocalEnergy,
+                result.instrumentalEnergy,
+                0.95f
+            )
         }
 
         // Convert float back to PCM 16-bit ByteBuffer
-        val outputBytes = outputFloat.size * 2
+        val outputBytes = sampleCount * 2
         val outputBuffer = replaceOutputBuffer(outputBytes)
 
-        for (i in outputFloat.indices) {
-            val clamped = min(1.0f, max(-1.0f, outputFloat[i]))
+        for (i in 0 until sampleCount) {
+            val clamped = min(1.0f, max(-1.0f, blendedOutput[i]))
             val shortVal = (clamped * 32767.0f).toInt().toShort()
             outputBuffer.putShort(shortVal)
         }
         outputBuffer.flip()
     }
 
-    private fun processNeuralSeparation(
-        inputPcm: FloatArray,
-        sampleRate: Int,
-        channelCount: Int
-    ): FloatArray {
-        val result: SeparationResult = separationEngine.separateChunk(inputPcm, sampleRate, channelCount)
-
-        val output = FloatArray(inputPcm.size)
-        val stepAlpha = (targetMixAlpha - currentMixAlpha) / inputPcm.size.toFloat()
-
-        for (i in inputPcm.indices) {
-            currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
-            // Blend original audio and vocal stem according to alpha
-            output[i] = (1.0f - currentMixAlpha) * result.originalAudio[i] + currentMixAlpha * result.vocalAudio[i]
-        }
-
-        onMetricsUpdated?.invoke(
-            result.rtf,
-            result.processingTimeMs,
-            result.vocalEnergy,
-            result.instrumentalEnergy,
-            ringBuffer.healthRatio()
-        )
-
-        return output
-    }
-
     override fun onFlush() {
         ringBuffer.clear()
-        accumulatorCount = 0
         currentMixAlpha = if (isVocalOnlyEnabled) vocalMixRatio else 0.0f
         targetMixAlpha = currentMixAlpha
     }

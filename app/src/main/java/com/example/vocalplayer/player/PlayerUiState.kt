@@ -17,7 +17,7 @@ data class PlayerUiState(
     val durationMs: Long = 0L,
     val mediaUri: Uri? = null,
     val mediaTitle: String = "No media selected",
-    val isVocalOnly: Boolean = true,
+    val isVocalOnly: Boolean = false,
     val vocalIntensity: Float = 1.0f,
     val playbackSpeed: Float = 1.0f,
     val volume: Float = 1.0f,

@@ -23,8 +23,12 @@ class STFT(
         (0.5f * (1f - cos(2.0 * PI * i / nFft))).toFloat()
     }
 
+    // Scratch buffers to eliminate object allocations during real-time streaming
+    private val realScratch = FloatArray(nFft)
+    private val imagScratch = FloatArray(nFft)
+
     /**
-     * Compute STFT spectrogram from audio samples.
+     * Compute STFT spectrogram from audio samples using zero-allocation primitive FFT.
      * Returns:
      * - magnitudes: FloatArray of shape [numBins * numFrames]
      * - phases: FloatArray of shape [numBins * numFrames]
@@ -36,23 +40,24 @@ class STFT(
 
         val magnitudes = FloatArray(numBins * numFrames)
         val phases = FloatArray(numBins * numFrames)
-        val frameBuffer = Array(nFft) { Complex.ZERO }
 
         for (frame in 0 until numFrames) {
             val startSample = frame * hopLength
             for (i in 0 until nFft) {
                 val idx = startSample + i
-                val sample = if (idx < audioLen) audio[idx] else 0f
-                frameBuffer[i] = Complex(sample * window[i], 0f)
+                realScratch[i] = if (idx < audioLen) audio[idx] * window[i] else 0f
+                imagScratch[i] = 0f
             }
 
-            val fftOut = FFT.forward(frameBuffer)
+            FFT.forward(realScratch, imagScratch, nFft)
 
+            val frameOffset = frame * numBins
             for (bin in 0 until numBins) {
-                val c = fftOut[bin]
-                val outIdx = frame * numBins + bin
-                magnitudes[outIdx] = c.magnitude()
-                phases[outIdx] = c.phase()
+                val r = realScratch[bin]
+                val im = imagScratch[bin]
+                val outIdx = frameOffset + bin
+                magnitudes[outIdx] = kotlin.math.sqrt(r * r + im * im)
+                phases[outIdx] = kotlin.math.atan2(im, r)
             }
         }
 
@@ -60,39 +65,40 @@ class STFT(
     }
 
     /**
-     * Reconstruct audio waveform from magnitude spectrogram and phase using Overlap-Add.
+     * Reconstruct audio waveform from magnitude spectrogram and phase using Overlap-Add
+     * with zero object allocations.
      */
     fun inverse(magnitudes: FloatArray, phases: FloatArray, numFrames: Int): FloatArray {
         val outputLen = (numFrames - 1) * hopLength + nFft
         val reconstructed = FloatArray(outputLen)
         val windowSum = FloatArray(outputLen)
 
-        val fftBuffer = Array(nFft) { Complex.ZERO }
-
         for (frame in 0 until numFrames) {
             val startSample = frame * hopLength
+            val frameOffset = frame * numBins
 
-            // Reconstruct full spectrum (Hermitian symmetry)
+            // Reconstruct full spectrum with Hermitian symmetry directly in primitive arrays
             for (bin in 0 until numBins) {
-                val idx = frame * numBins + bin
+                val idx = frameOffset + bin
                 val mag = magnitudes[idx]
                 val ph = phases[idx]
-                fftBuffer[bin] = Complex.fromPolar(mag, ph)
+                realScratch[bin] = mag * kotlin.math.cos(ph)
+                imagScratch[bin] = mag * kotlin.math.sin(ph)
             }
             // Conjugate symmetry for negative frequencies
             for (bin in numBins until nFft) {
                 val mirrorBin = nFft - bin
-                val c = fftBuffer[mirrorBin]
-                fftBuffer[bin] = Complex(c.real, -c.imag)
+                realScratch[bin] = realScratch[mirrorBin]
+                imagScratch[bin] = -imagScratch[mirrorBin]
             }
 
-            val timeFrame = FFT.inverse(fftBuffer)
+            FFT.inverse(realScratch, imagScratch, nFft)
 
             for (i in 0 until nFft) {
                 val outIdx = startSample + i
                 if (outIdx < outputLen) {
                     val w = window[i]
-                    reconstructed[outIdx] += timeFrame[i].real * w
+                    reconstructed[outIdx] += realScratch[i] * w
                     windowSum[outIdx] += w * w
                 }
             }
