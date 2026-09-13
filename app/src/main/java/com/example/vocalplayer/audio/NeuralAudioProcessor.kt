@@ -65,110 +65,119 @@ class NeuralAudioProcessor(
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
 
-        // Target mix alpha based on toggle state
-        targetMixAlpha = if (isVocalOnlyEnabled) vocalMixRatio else 0.0f
+        try {
+            // Target mix alpha based on toggle state
+            targetMixAlpha = if (isVocalOnlyEnabled) vocalMixRatio else 0.0f
 
-        // FAST PATH: When vocal isolation is disabled and transition complete, direct zero-copy pass-through
-        if (targetMixAlpha <= 0.001f && currentMixAlpha <= 0.001f) {
-            currentMixAlpha = 0.0f
+            // FAST PATH: When vocal isolation is disabled and transition complete, direct zero-copy pass-through
+            if (targetMixAlpha <= 0.001f && currentMixAlpha <= 0.001f) {
+                currentMixAlpha = 0.0f
+                val outputBuffer = replaceOutputBuffer(remaining)
+                outputBuffer.put(inputBuffer)
+                outputBuffer.flip()
+                playbackSampleIndex += (remaining / 2)
+                return
+            }
+
+            val sampleRate = inputAudioFormat.sampleRate
+            val channelCount = inputAudioFormat.channelCount
+            val sampleCount = remaining / 2 // 16-bit = 2 bytes per sample
+
+            // Ensure scratch buffers are large enough
+            if (sampleCount > floatSamples.size) {
+                floatSamples = FloatArray(sampleCount * 2)
+                shorts = ShortArray(sampleCount * 2)
+                cachedVocalShorts = ShortArray(sampleCount * 2)
+                blendedOutput = FloatArray(sampleCount * 2)
+            }
+
+            // Convert PCM 16-bit to short scratch arrays
+            val shortBuffer = inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+            val availableShorts = kotlin.math.min(sampleCount, shortBuffer.remaining())
+            shortBuffer.get(shorts, 0, availableShorts)
+            inputBuffer.position(inputBuffer.limit())
+
+            val uri = activeMediaUri
+            val isCached = uri != null && cacheManager != null && cacheManager.isVocalCached(uri)
+            val inv32768 = 1.0f / 32768.0f
+
+            if (isCached && uri != null && cacheManager != null) {
+                // ZERO-LAG CACHED PLAYBACK: Read pre-extracted Demucs vocal stem directly
+                val readCount = cacheManager.readVocalSlice(uri, playbackSampleIndex, availableShorts, cachedVocalShorts)
+                val stepAlpha = (targetMixAlpha - currentMixAlpha) / availableShorts.toFloat().coerceAtLeast(1f)
+
+                var vocalEnergySum = 0f
+                var instEnergySum = 0f
+
+                for (i in 0 until availableShorts) {
+                    currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
+                    val orig = shorts[i] * inv32768
+                    val vocal = if (i < readCount) cachedVocalShorts[i] * inv32768 else orig
+                    val blended = (1.0f - currentMixAlpha) * orig + currentMixAlpha * vocal
+                    blendedOutput[i] = blended
+
+                    vocalEnergySum += vocal * vocal
+                    val inst = orig - vocal
+                    instEnergySum += inst * inst
+                }
+
+                playbackSampleIndex += availableShorts
+
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastMetricsUpdateTime >= 120L) {
+                    lastMetricsUpdateTime = now
+                    val vEnergy = kotlin.math.sqrt(vocalEnergySum / availableShorts.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val iEnergy = kotlin.math.sqrt(instEnergySum / availableShorts.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    onMetricsUpdated?.invoke(0.001f, 0L, vEnergy, iEnergy, 1.0f)
+                }
+            } else {
+                // Live processing path for un-cached content
+                for (i in 0 until availableShorts) {
+                    floatSamples[i] = shorts[i] * inv32768
+                }
+
+                val inputSlice = if (floatSamples.size == availableShorts) floatSamples else floatSamples.copyOf(availableShorts)
+                val result: SeparationResult = separationEngine.separateChunk(inputSlice, sampleRate, channelCount)
+
+                val stepAlpha = (targetMixAlpha - currentMixAlpha) / availableShorts.toFloat().coerceAtLeast(1f)
+                for (i in 0 until availableShorts) {
+                    currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
+                    val orig = if (i < result.originalAudio.size) result.originalAudio[i] else floatSamples[i]
+                    val vocal = if (i < result.vocalAudio.size) result.vocalAudio[i] else orig
+                    blendedOutput[i] = (1.0f - currentMixAlpha) * orig + currentMixAlpha * vocal
+                }
+
+                playbackSampleIndex += availableShorts
+
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastMetricsUpdateTime >= 120L) {
+                    lastMetricsUpdateTime = now
+                    onMetricsUpdated?.invoke(
+                        result.rtf,
+                        result.processingTimeMs,
+                        result.vocalEnergy,
+                        result.instrumentalEnergy,
+                        0.95f
+                    )
+                }
+            }
+
+            // Convert float back to PCM 16-bit ByteBuffer
+            val outputBytes = availableShorts * 2
+            val outputBuffer = replaceOutputBuffer(outputBytes)
+
+            for (i in 0 until availableShorts) {
+                val clamped = min(1.0f, max(-1.0f, blendedOutput[i]))
+                val shortVal = (clamped * 32767.0f).toInt().toShort()
+                outputBuffer.putShort(shortVal)
+            }
+            outputBuffer.flip()
+        } catch (e: Throwable) {
+            android.util.Log.e("NeuralAudioProcessor", "Error processing audio: ${e.message}", e)
             val outputBuffer = replaceOutputBuffer(remaining)
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
-            playbackSampleIndex += (remaining / 2)
-            return
         }
-
-        val sampleRate = inputAudioFormat.sampleRate
-        val channelCount = inputAudioFormat.channelCount
-        val sampleCount = remaining / 2 // 16-bit = 2 bytes per sample
-
-        // Ensure scratch buffers are large enough
-        if (sampleCount > floatSamples.size) {
-            floatSamples = FloatArray(sampleCount * 2)
-            shorts = ShortArray(sampleCount * 2)
-            cachedVocalShorts = ShortArray(sampleCount * 2)
-            blendedOutput = FloatArray(sampleCount * 2)
-        }
-
-        // Convert PCM 16-bit to short scratch arrays
-        val shortBuffer = inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        shortBuffer.get(shorts, 0, sampleCount)
-        inputBuffer.position(inputBuffer.position() + remaining)
-
-        val uri = activeMediaUri
-        val isCached = uri != null && cacheManager != null && cacheManager.isVocalCached(uri)
-
-        val inv32768 = 1.0f / 32768.0f
-
-        if (isCached && uri != null && cacheManager != null) {
-            // ZERO-LAG CACHED PLAYBACK: Read pre-extracted Demucs vocal stem directly
-            val readCount = cacheManager.readVocalSlice(uri, playbackSampleIndex, sampleCount, cachedVocalShorts)
-            val stepAlpha = (targetMixAlpha - currentMixAlpha) / sampleCount.toFloat()
-
-            var vocalEnergySum = 0f
-            var instEnergySum = 0f
-
-            for (i in 0 until sampleCount) {
-                currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
-                val orig = shorts[i] * inv32768
-                val vocal = if (i < readCount) cachedVocalShorts[i] * inv32768 else orig
-                val blended = (1.0f - currentMixAlpha) * orig + currentMixAlpha * vocal
-                blendedOutput[i] = blended
-
-                vocalEnergySum += vocal * vocal
-                val inst = orig - vocal
-                instEnergySum += inst * inst
-            }
-
-            playbackSampleIndex += sampleCount
-
-            val now = android.os.SystemClock.uptimeMillis()
-            if (now - lastMetricsUpdateTime >= 120L) {
-                lastMetricsUpdateTime = now
-                val vEnergy = kotlin.math.sqrt(vocalEnergySum / sampleCount.toFloat()).coerceIn(0f, 1f)
-                val iEnergy = kotlin.math.sqrt(instEnergySum / sampleCount.toFloat()).coerceIn(0f, 1f)
-                onMetricsUpdated?.invoke(0.001f, 0L, vEnergy, iEnergy, 1.0f)
-            }
-        } else {
-            // Live processing path for un-cached content
-            for (i in 0 until sampleCount) {
-                floatSamples[i] = shorts[i] * inv32768
-            }
-
-            val inputSlice = if (floatSamples.size == sampleCount) floatSamples else floatSamples.copyOf(sampleCount)
-            val result: SeparationResult = separationEngine.separateChunk(inputSlice, sampleRate, channelCount)
-
-            val stepAlpha = (targetMixAlpha - currentMixAlpha) / sampleCount.toFloat()
-            for (i in 0 until sampleCount) {
-                currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
-                blendedOutput[i] = (1.0f - currentMixAlpha) * result.originalAudio[i] + currentMixAlpha * result.vocalAudio[i]
-            }
-
-            playbackSampleIndex += sampleCount
-
-            val now = android.os.SystemClock.uptimeMillis()
-            if (now - lastMetricsUpdateTime >= 120L) {
-                lastMetricsUpdateTime = now
-                onMetricsUpdated?.invoke(
-                    result.rtf,
-                    result.processingTimeMs,
-                    result.vocalEnergy,
-                    result.instrumentalEnergy,
-                    0.95f
-                )
-            }
-        }
-
-        // Convert float back to PCM 16-bit ByteBuffer
-        val outputBytes = sampleCount * 2
-        val outputBuffer = replaceOutputBuffer(outputBytes)
-
-        for (i in 0 until sampleCount) {
-            val clamped = min(1.0f, max(-1.0f, blendedOutput[i]))
-            val shortVal = (clamped * 32767.0f).toInt().toShort()
-            outputBuffer.putShort(shortVal)
-        }
-        outputBuffer.flip()
     }
 
     override fun onFlush() {

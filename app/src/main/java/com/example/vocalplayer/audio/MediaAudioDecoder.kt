@@ -32,13 +32,17 @@ class MediaAudioDecoder(private val context: Context) {
     ): DecodedAudio = withContext(Dispatchers.IO) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
+        var pfd: android.os.ParcelFileDescriptor? = null
 
         try {
             if (uri.scheme == "content") {
                 try {
-                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                    if (pfd != null) {
                         extractor.setDataSource(pfd.fileDescriptor)
-                    } ?: extractor.setDataSource(context, uri, null)
+                    } else {
+                        extractor.setDataSource(context, uri, null)
+                    }
                 } catch (e: Exception) {
                     Log.w(tag, "Failed to open content FD, falling back to context URI: ${e.message}")
                     extractor.setDataSource(context, uri, null)
@@ -139,7 +143,16 @@ class MediaAudioDecoder(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(tag, "Error closing codec: ${e.message}")
             }
-            extractor.release()
+            try {
+                extractor.release()
+            } catch (e: Exception) {
+                Log.w(tag, "Error releasing extractor: ${e.message}")
+            }
+            try {
+                pfd?.close()
+            } catch (e: Exception) {
+                Log.w(tag, "Error closing PFD: ${e.message}")
+            }
         }
     }
 

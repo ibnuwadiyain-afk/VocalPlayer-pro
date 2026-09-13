@@ -66,6 +66,7 @@ class VocalVideoPlayer(private val context: Context) {
                 enableAudioTrackPlaybackParams: Boolean
             ): AudioSink {
                 return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(false)
                     .setAudioProcessors(arrayOf<AudioProcessor>(audioProcessor))
                     .build()
             }
@@ -114,18 +115,19 @@ class VocalVideoPlayer(private val context: Context) {
                     it.copy(
                         isBuffering = isBuffering,
                         durationMs = duration,
-                        hasMediaLoaded = playbackState != Player.STATE_IDLE
+                        hasMediaLoaded = it.mediaUri != null
                     )
                 }
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                Log.e(tag, "ExoPlayer playback error: ${error.message}", error)
+                val rootCause = error.cause?.localizedMessage ?: error.cause?.message ?: error.localizedMessage ?: error.message
+                Log.e(tag, "ExoPlayer playback error: $rootCause", error)
                 _uiState.update {
                     it.copy(
                         isPlaying = false,
                         isBuffering = false,
-                        statusMessage = "Playback error: ${error.localizedMessage ?: error.message}"
+                        statusMessage = "Playback error: $rootCause"
                     )
                 }
             }
@@ -168,6 +170,13 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun play() {
+        if (exoPlayer.playbackState == Player.STATE_IDLE) {
+            _uiState.value.mediaUri?.let { uri ->
+                val mediaItem = MediaItem.fromUri(uri)
+                exoPlayer.setMediaItem(mediaItem)
+                exoPlayer.prepare()
+            }
+        }
         if (exoPlayer.playbackState == Player.STATE_ENDED) {
             exoPlayer.seekTo(0L)
             audioProcessor.resetStreamPosition(0L)
