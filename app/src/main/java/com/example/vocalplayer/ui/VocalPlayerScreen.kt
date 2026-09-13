@@ -265,6 +265,10 @@ fun VocalPlayerScreen(
                     hasMediaLoaded = uiState.hasMediaLoaded,
                     isBuffering = uiState.isBuffering,
                     isVocalOnly = uiState.isVocalOnly,
+                    isPlaying = uiState.isPlaying,
+                    isExtractingVocals = uiState.isExtractingVocals,
+                    extractionProgress = uiState.extractionProgress,
+                    onTogglePlayPause = { player.togglePlayPause() },
                     onOpenFilePicker = {
                         videoPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)

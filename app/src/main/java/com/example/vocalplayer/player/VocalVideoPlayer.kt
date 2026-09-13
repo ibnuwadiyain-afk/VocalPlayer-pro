@@ -3,6 +3,7 @@ package com.example.vocalplayer.player
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -33,6 +34,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(UnstableApi::class)
 class VocalVideoPlayer(private val context: Context) {
+    private val tag = "VocalVideoPlayer"
 
     val cacheManager = com.example.vocalplayer.cache.VocalCacheManager(context)
     private val modelManager = ModelManager(context)
@@ -116,6 +118,17 @@ class VocalVideoPlayer(private val context: Context) {
                     )
                 }
             }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                Log.e(tag, "ExoPlayer playback error: ${error.message}", error)
+                _uiState.update {
+                    it.copy(
+                        isPlaying = false,
+                        isBuffering = false,
+                        statusMessage = "Playback error: ${error.localizedMessage ?: error.message}"
+                    )
+                }
+            }
         })
     }
 
@@ -155,6 +168,10 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun play() {
+        if (exoPlayer.playbackState == Player.STATE_ENDED) {
+            exoPlayer.seekTo(0L)
+            audioProcessor.resetStreamPosition(0L)
+        }
         exoPlayer.play()
     }
 
@@ -172,6 +189,7 @@ class VocalVideoPlayer(private val context: Context) {
 
     fun seekTo(positionMs: Long) {
         exoPlayer.seekTo(positionMs)
+        audioProcessor.resetStreamPosition(positionMs)
         _uiState.update { it.copy(currentPositionMs = positionMs) }
     }
 
@@ -209,7 +227,6 @@ class VocalVideoPlayer(private val context: Context) {
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
-        exoPlayer.play()
 
         _uiState.update {
             it.copy(
@@ -223,8 +240,15 @@ class VocalVideoPlayer(private val context: Context) {
             )
         }
 
-        // If not cached yet, start background offline Demucs extraction
-        if (!isCached) {
+        if (isCached) {
+            cacheManager.setActiveMedia(uri)
+            audioProcessor.resetStreamPosition(0L)
+            exoPlayer.seekTo(0L)
+            exoPlayer.play()
+        } else {
+            // Keep at start while Demucs extraction isolates vocals in background
+            exoPlayer.pause()
+            exoPlayer.seekTo(0L)
             extractVocalsOffline(uri)
         }
     }
@@ -232,6 +256,9 @@ class VocalVideoPlayer(private val context: Context) {
     fun extractVocalsOffline(targetUri: Uri? = null) {
         val uri = targetUri ?: _uiState.value.mediaUri ?: return
         if (cacheManager.isVocalCached(uri)) {
+            cacheManager.setActiveMedia(uri)
+            audioProcessor.activeMediaUri = uri
+            audioProcessor.resetStreamPosition(exoPlayer.currentPosition)
             _uiState.update {
                 it.copy(
                     isVocalCached = true,
@@ -258,6 +285,14 @@ class VocalVideoPlayer(private val context: Context) {
                         extractionProgress = prog.progress
                     )
                 }
+            }
+
+            if (success) {
+                cacheManager.setActiveMedia(uri)
+                audioProcessor.activeMediaUri = uri
+                audioProcessor.resetStreamPosition(0L)
+                exoPlayer.seekTo(0L)
+                exoPlayer.play()
             }
 
             _uiState.update {

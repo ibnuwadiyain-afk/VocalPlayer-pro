@@ -34,7 +34,18 @@ class MediaAudioDecoder(private val context: Context) {
         var codec: MediaCodec? = null
 
         try {
-            extractor.setDataSource(context, uri, null)
+            if (uri.scheme == "content") {
+                try {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        extractor.setDataSource(pfd.fileDescriptor)
+                    } ?: extractor.setDataSource(context, uri, null)
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to open content FD, falling back to context URI: ${e.message}")
+                    extractor.setDataSource(context, uri, null)
+                }
+            } else {
+                extractor.setDataSource(context, uri, null)
+            }
             val audioTrackIndex = findAudioTrack(extractor)
             if (audioTrackIndex < 0) {
                 throw IllegalStateException("No audio track found in media file: $uri")

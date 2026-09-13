@@ -19,13 +19,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -59,6 +64,10 @@ fun VideoSurface(
     hasMediaLoaded: Boolean,
     isBuffering: Boolean,
     isVocalOnly: Boolean,
+    isPlaying: Boolean = false,
+    isExtractingVocals: Boolean = false,
+    extractionProgress: Float = 0f,
+    onTogglePlayPause: () -> Unit = {},
     onOpenFilePicker: () -> Unit,
     onOpenDemos: () -> Unit,
     modifier: Modifier = Modifier
@@ -74,24 +83,83 @@ fun VideoSurface(
         contentAlignment = Alignment.Center
     ) {
         if (hasMediaLoaded) {
-            AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        player = exoPlayer
-                        useController = false
-                        layoutParams = FrameLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(onClick = onTogglePlayPause)
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = exoPlayer
+                            useController = false
+                            layoutParams = FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        }
+                    },
+                    update = { view ->
+                        if (view.player != exoPlayer) {
+                            view.player = exoPlayer
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            // Extraction overlay when Demucs is processing
+            if (isExtractingVocals) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.65f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(20.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            progress = { extractionProgress },
+                            color = VocalCyan,
+                            modifier = Modifier.size(46.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Demucs Neural Extraction (${(extractionProgress * 100).toInt()}%)",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Auto-plays with 0ms lag once stem is ready",
+                            color = TextSecondary,
+                            fontSize = 11.sp
                         )
                     }
-                },
-                update = { view ->
-                    if (view.player != exoPlayer) {
-                        view.player = exoPlayer
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                }
+            }
+
+            // Center Play / Replay Overlay button when paused/ended
+            if (!isPlaying && !isBuffering && !isExtractingVocals) {
+                val isEnded = exoPlayer.playbackState == Player.STATE_ENDED
+                Box(
+                    modifier = Modifier
+                        .size(60.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .clickable(onClick = onTogglePlayPause),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isEnded) Icons.Default.Replay else Icons.Default.PlayArrow,
+                        contentDescription = if (isEnded) "Replay" else "Play",
+                        tint = VocalCyan,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+            }
 
             // Buffering Indicator
             if (isBuffering) {

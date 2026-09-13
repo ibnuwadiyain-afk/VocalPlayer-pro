@@ -186,4 +186,11 @@ class NeuralAudioProcessor(
         onFlush()
         separationEngine.reset()
     }
+
+    fun resetStreamPosition(positionMs: Long = 0L) {
+        val sampleRate = if (inputAudioFormat.sampleRate > 0) inputAudioFormat.sampleRate else 44100
+        val channelCount = if (inputAudioFormat.channelCount > 0) inputAudioFormat.channelCount else 2
+        playbackSampleIndex = ((positionMs * sampleRate.toLong()) / 1000L) * channelCount.toLong()
+        ringBuffer.clear()
+    }
 }
