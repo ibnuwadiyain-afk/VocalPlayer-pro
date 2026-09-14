@@ -27,13 +27,14 @@ class VocalCacheManager(private val context: Context) {
 
     fun getCacheKey(uri: Uri): String {
         val uriStr = uri.toString()
-        return try {
+        val baseHash = try {
             val digest = MessageDigest.getInstance("MD5")
             val bytes = digest.digest(uriStr.toByteArray(Charsets.UTF_8))
             bytes.joinToString("") { "%02x".format(it) }
         } catch (e: Exception) {
             uriStr.hashCode().toString()
         }
+        return "v2_$baseHash"
     }
 
     fun isVocalCached(uri: Uri): Boolean {

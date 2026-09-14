@@ -378,11 +378,11 @@ class NeuralSeparationEngine(
             // Panning coherence: center vocals have high correlation, panned instruments have high side energy
             val absMid = abs(mid)
             val absSide = abs(side)
-            val centerRatio = absMid / (absMid + absSide * 1.8f + 1e-4f)
+            val centerRatio = (absMid / (absMid + absSide * 2.5f + 1e-4f)).coerceIn(0f, 1f)
             val centerWeight = centerRatio * centerRatio
 
             // Dynamic expansion: squelch background instrumentals when mid channel drops
-            val vocalCore = mid * (0.15f + 0.85f * centerWeight)
+            val vocalCore = mid * (centerWeight * centerWeight)
 
             // High-pass filtering on left & right vocal core (suppress sub-bass, kick rumble)
             val hpL = alphaHp * (hpPrevOutL + vocalCore - hpPrevInL)
@@ -400,8 +400,8 @@ class NeuralSeparationEngine(
             val lpR = lpPrevOutR + alphaLp * (hpR - lpPrevOutR)
             lpPrevOutR = lpR
 
-            // Blend with a touch of natural stereo width
-            val leakFactor = (1.0f - suppression) * 0.2f
+            // Suppress background instrumentals
+            val leakFactor = ((1.0f - suppression) * 0.05f).coerceAtLeast(0f)
             outL[i] = lpL + side * leakFactor
             outR[i] = lpR - side * leakFactor
         }
@@ -457,12 +457,12 @@ class NeuralSeparationEngine(
         for (bin in 0 until numBins) {
             val freq = bin * binFreqHz
             val vocalPrior = when {
-                freq < 80f -> 0.08f
-                freq in 80f..300f -> 0.45f + 0.35f * ((freq - 80f) / 220f)
-                freq in 300f..3200f -> 0.95f
-                freq in 3200f..5500f -> 0.95f - 0.35f * ((freq - 3200f) / 2300f)
-                freq in 5500f..9000f -> 0.35f - 0.20f * ((freq - 5500f) / 3500f)
-                else -> 0.10f
+                freq < 90f -> 0.01f
+                freq in 90f..220f -> 0.05f + 0.80f * ((freq - 90f) / 130f)
+                freq in 220f..3500f -> 1.0f
+                freq in 3500f..5500f -> 1.0f - 0.65f * ((freq - 3500f) / 2000f)
+                freq in 5500f..8500f -> 0.35f - 0.33f * ((freq - 5500f) / 3000f)
+                else -> 0.01f
             }
 
             for (frame in 0 until numFrames) {
@@ -470,20 +470,22 @@ class NeuralSeparationEngine(
                 val magL = stftL.magnitudes[idx]
                 val magR = stftR.magnitudes[idx]
 
-                val magSum = magL + magR + 1e-6f
-                val magDiff = abs(magL - magR)
-                val centerFactor = 1.0f - (magDiff / magSum)
-                val panCoherence = 0.35f + 0.65f * (centerFactor * centerFactor)
+                val midMag = 0.5f * (magL + magR)
+                val sideMag = 0.5f * abs(magL - magR)
 
-                val rawScoreL = (magL * 2.8f) * vocalPrior * panCoherence
-                val maskL = 1.0f / (1.0f + exp(-3.2f * (rawScoreL - 0.45f)))
-                val finalMaskL = min(1.0f, max(0.02f, maskL * (1.0f + (1.0f - config.instrumentalSuppression) * 0.2f)))
-                vocalMagsL[idx] = magL * finalMaskL
+                val centerCoherence = (midMag / (midMag + 2.4f * sideMag + 1e-5f)).coerceIn(0f, 1f)
+                val centerWeight = centerCoherence * centerCoherence
 
-                val rawScoreR = (magR * 2.8f) * vocalPrior * panCoherence
-                val maskR = 1.0f / (1.0f + exp(-3.2f * (rawScoreR - 0.45f)))
-                val finalMaskR = min(1.0f, max(0.02f, maskR * (1.0f + (1.0f - config.instrumentalSuppression) * 0.2f)))
-                vocalMagsR[idx] = magR * finalMaskR
+                val vocalScore = centerWeight * vocalPrior
+                val mask = if (vocalScore < 0.15f) {
+                    0.005f
+                } else {
+                    val norm = (vocalScore - 0.15f) / 0.85f
+                    (norm * norm).coerceIn(0.005f, 1.0f)
+                }
+
+                vocalMagsL[idx] = magL * mask
+                vocalMagsR[idx] = magR * mask
             }
         }
 

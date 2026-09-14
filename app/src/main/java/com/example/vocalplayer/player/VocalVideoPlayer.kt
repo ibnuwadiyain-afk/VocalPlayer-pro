@@ -260,10 +260,17 @@ class VocalVideoPlayer(private val context: Context) {
         if (isCached) {
             cacheManager.setActiveMedia(uri)
             audioProcessor.resetStreamPosition(0L)
+            audioProcessor.isVocalOnlyEnabled = true
+            _uiState.update {
+                it.copy(
+                    isVocalOnly = true,
+                    statusMessage = "Isolated Vocals Loaded (0ms Lag Cached Playback)"
+                )
+            }
             exoPlayer.seekTo(0L)
             exoPlayer.play()
         } else {
-            // Keep at start while Demucs extraction isolates vocals in background
+            // Keep at start while extraction isolates vocals in background
             exoPlayer.pause()
             exoPlayer.seekTo(0L)
             extractVocalsOffline(uri)
@@ -276,10 +283,12 @@ class VocalVideoPlayer(private val context: Context) {
             cacheManager.setActiveMedia(uri)
             audioProcessor.activeMediaUri = uri
             audioProcessor.resetStreamPosition(exoPlayer.currentPosition)
+            audioProcessor.isVocalOnlyEnabled = true
             _uiState.update {
                 it.copy(
                     isVocalCached = true,
-                    statusMessage = "Demucs Vocals already cached (0ms Lag)"
+                    isVocalOnly = true,
+                    statusMessage = "Isolated Vocals Active (0ms Lag)"
                 )
             }
             return
@@ -290,7 +299,7 @@ class VocalVideoPlayer(private val context: Context) {
             _uiState.update {
                 it.copy(
                     isExtractingVocals = true,
-                    extractionStage = "Starting Demucs offline isolation...",
+                    extractionStage = "Starting offline vocal isolation...",
                     extractionProgress = 0.0f
                 )
             }
@@ -310,6 +319,7 @@ class VocalVideoPlayer(private val context: Context) {
                     audioProcessor.activeMediaUri = uri
                     latestPlaybackPositionMs = 0L
                     audioProcessor.resetStreamPosition(0L)
+                    audioProcessor.isVocalOnlyEnabled = true
                     exoPlayer.seekTo(0L)
                     exoPlayer.play()
                 }
@@ -319,8 +329,9 @@ class VocalVideoPlayer(private val context: Context) {
                 it.copy(
                     isExtractingVocals = false,
                     isVocalCached = success,
+                    isVocalOnly = if (success) true else it.isVocalOnly,
                     cacheSizeMb = cacheManager.getCacheSizeMb(),
-                    statusMessage = if (success) "Demucs Vocals Cached! 0ms Lag-Free Playback Ready" else "Demucs extraction error"
+                    statusMessage = if (success) "Isolated Vocals Active! 0ms Lag-Free Playback" else "Extraction error"
                 )
             }
         }

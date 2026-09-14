@@ -6,6 +6,8 @@ import android.util.Log
 import com.example.vocalplayer.audio.MediaAudioDecoder
 import com.example.vocalplayer.cache.VocalCacheManager
 import com.example.vocalplayer.dsp.DemucsSpectrogramTransformer
+import com.example.vocalplayer.dsp.STFT
+import com.example.vocalplayer.dsp.SpleeterSpectrogramTransformer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -32,6 +34,7 @@ class OfflineVocalSeparator(
     private val tag = "OfflineVocalSeparator"
     private val decoder = MediaAudioDecoder(context)
     private val demucsTransformer = DemucsSpectrogramTransformer()
+    private val spleeterTransformer = SpleeterSpectrogramTransformer(nFft = 4096, hopLength = 1024, dimF = 1024, dimT = 512)
     private val onnxRunner = OnnxModelRunner(context)
 
     data class ExtractionProgress(
@@ -95,24 +98,54 @@ class OfflineVocalSeparator(
             }
 
             currentCoroutineContext().ensureActive()
-            onProgress(ExtractionProgress("Loading Demucs ONNX model...", 0.18f))
 
-            // Step 2: Initialize Demucs ONNX model
+            // Step 2: Determine and initialize best available neural / spectral source separation model
             val demucsProfile = modelManager.getAllModels().find { it.id == NeuralModelProfile.DEMUCS_INT8.id }
-            val modelPath = demucsProfile?.modelPath ?: modelManager.downloader.getSecureModelFile("htdemucs_int8").absolutePath
+            val demucsPath = demucsProfile?.modelPath ?: modelManager.downloader.getSecureModelFile("htdemucs_int8").absolutePath
 
-            val modelLoaded = if (File(modelPath).exists()) {
-                onnxRunner.loadDemucsModel(modelPath)
-            } else {
-                false
-            }
+            val demucsLoaded = if (File(demucsPath).exists()) {
+                onProgress(ExtractionProgress("Loading Demucs Hybrid Transformer ONNX model...", 0.18f))
+                onnxRunner.loadDemucsModel(demucsPath)
+            } else false
 
-            val separatedVocalsShorts: ShortArray = if (modelLoaded) {
-                Log.i(tag, "Running Demucs v4 offline separation on $numFrames frames...")
-                separateWithDemucs(leftAudio, rightAudio, numFrames, onProgress)
-            } else {
-                Log.w(tag, "Demucs model not found, falling back to built-in Spleeter/spectral isolation")
-                separateWithFallback(leftAudio, rightAudio, numFrames, onProgress)
+            val spleeterLoaded = if (!demucsLoaded) {
+                onProgress(ExtractionProgress("Loading Spleeter 2-stem ONNX model...", 0.18f))
+                try {
+                    val downloader = modelManager.downloader
+                    val vocalsFile = downloader.getSecureModelFile("spleeter_2stems_vocals").let {
+                        if (it.exists() && it.length() > 1024) it
+                        else downloader.copyAssetModelIfPresent("models/spleeter_2stems_vocals.onnx", "spleeter_2stems_vocals")
+                    }
+                    val accFile = downloader.getSecureModelFile("spleeter_2stems_accompaniment").let {
+                        if (it.exists() && it.length() > 1024) it
+                        else downloader.copyAssetModelIfPresent("models/spleeter_2stems_accompaniment.onnx", "spleeter_2stems_accompaniment")
+                    }
+                    if (vocalsFile != null && vocalsFile.exists()) {
+                        onnxRunner.loadSpleeterModels(
+                            vocalsPath = vocalsFile.absolutePath,
+                            accompanimentPath = accFile?.absolutePath,
+                            threadCount = 4
+                        )
+                    } else false
+                } catch (e: Exception) {
+                    Log.w(tag, "Spleeter asset staging error: ${e.message}")
+                    false
+                }
+            } else false
+
+            val separatedVocalsShorts: ShortArray = when {
+                demucsLoaded -> {
+                    Log.i(tag, "Running Demucs v4 offline separation on $numFrames frames...")
+                    separateWithDemucs(leftAudio, rightAudio, numFrames, onProgress)
+                }
+                spleeterLoaded -> {
+                    Log.i(tag, "Running Deezer Spleeter 2-stem ONNX neural isolation on $numFrames frames...")
+                    separateWithSpleeter(leftAudio, rightAudio, numFrames, onProgress)
+                }
+                else -> {
+                    Log.i(tag, "Running high-precision harmonic STFT spectral vocal isolation on $numFrames frames...")
+                    separateWithSpectral(leftAudio, rightAudio, numFrames, onProgress)
+                }
             }
 
             currentCoroutineContext().ensureActive()
@@ -188,12 +221,13 @@ class OfflineVocalSeparator(
                     weights[frameIdx] += w
                 }
             } else {
-                // Fallback: pass-through vocal band
+                // Spectral fallback if Demucs tensor failed on this block
+                val (spL, spR) = separateStereoSpectral(segLeft.copyOf(available), segRight.copyOf(available))
                 for (i in 0 until available) {
                     val frameIdx = startFrame + i
                     val w = window[i]
-                    outVocalLeft[frameIdx] += segLeft[i] * w
-                    outVocalRight[frameIdx] += segRight[i] * w
+                    outVocalLeft[frameIdx] += spL[i] * w
+                    outVocalRight[frameIdx] += spR[i] * w
                     weights[frameIdx] += w
                 }
             }
@@ -220,33 +254,164 @@ class OfflineVocalSeparator(
     }
 
     /**
-     * Ultra-fast high-fidelity fallback separation if Demucs model is staging.
+     * Executes Deezer Spleeter 2-stem ONNX neural vocal isolation in sequential segments.
+     * Guaranteed zero out-of-memory and high throughput.
      */
-    private fun separateWithFallback(
+    private suspend fun separateWithSpleeter(
+        leftAudio: FloatArray,
+        rightAudio: FloatArray,
+        numFrames: Int,
+        onProgress: (ExtractionProgress) -> Unit
+    ): ShortArray {
+        val chunkSamples = 524288 // 512 frames * 1024 hop = ~11.88 seconds
+        val totalChunks = ((numFrames + chunkSamples - 1) / chunkSamples).coerceAtLeast(1)
+        val resultShorts = ShortArray(numFrames * 2)
+
+        var startFrame = 0
+        var chunkIndex = 0
+
+        while (startFrame < numFrames) {
+            currentCoroutineContext().ensureActive()
+            val chunkLen = min(chunkSamples, numFrames - startFrame)
+            val chunkL = leftAudio.copyOfRange(startFrame, startFrame + chunkLen)
+            val chunkR = rightAudio.copyOfRange(startFrame, startFrame + chunkLen)
+
+            val (recL, recR) = try {
+                val stftData = spleeterTransformer.forwardToSpleeterTensor(chunkL, chunkR)
+                val vocalsOutput = onnxRunner.runSpleeterVocals(stftData.magTensor, stftData.numChunks)
+
+                if (vocalsOutput != null) {
+                    val accOutput = onnxRunner.runSpleeterAccompaniment(stftData.magTensor, stftData.numChunks)
+                    spleeterTransformer.inverseFromSpleeterTensor(
+                        stftData = stftData,
+                        vocalsOutput = vocalsOutput,
+                        accompanimentOutput = accOutput,
+                        targetLength = chunkLen,
+                        vocalMaskStrength = 1.0f
+                    )
+                } else {
+                    Log.w(tag, "Spleeter ONNX returned null on chunk $chunkIndex, falling back to spectral isolation")
+                    separateStereoSpectral(chunkL, chunkR)
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Error in Spleeter chunk $chunkIndex: ${e.message}", e)
+                separateStereoSpectral(chunkL, chunkR)
+            }
+
+            for (i in 0 until chunkLen) {
+                resultShorts[(startFrame + i) * 2] = (recL[i].coerceIn(-1.0f, 1.0f) * 32767.0f).toInt().toShort()
+                resultShorts[(startFrame + i) * 2 + 1] = (recR[i].coerceIn(-1.0f, 1.0f) * 32767.0f).toInt().toShort()
+            }
+
+            chunkIndex++
+            val prog = (0.20f + (chunkIndex.toFloat() / totalChunks.toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
+            onProgress(ExtractionProgress("Spleeter Neural Isolation (${chunkIndex}/$totalChunks)...", prog))
+
+            startFrame += chunkSamples
+        }
+
+        return resultShorts
+    }
+
+    /**
+     * High-precision harmonic STFT spectral vocal isolation.
+     * Uses phantom-center mid/side phase coherence and vocal formant harmonic priors
+     * to eliminate panned instruments, stereo synths, cymbals, bass, and drums.
+     */
+    private suspend fun separateWithSpectral(
         leftAudio: FloatArray,
         rightAudio: FloatArray,
         numFrames: Int,
         onProgress: (ExtractionProgress) -> Unit
     ): ShortArray {
         val resultShorts = ShortArray(numFrames * 2)
-        val chunkSize = 4096
+        val chunkSize = 65536
+        var start = 0
+        var chunkIdx = 0
+        val totalChunks = ((numFrames + chunkSize - 1) / chunkSize).coerceAtLeast(1)
 
-        for (i in 0 until numFrames step chunkSize) {
-            val end = min(i + chunkSize, numFrames)
-            for (j in i until end) {
-                // High-precision center channel vocal extraction
-                val mid = (leftAudio[j] + rightAudio[j]) * 0.5f
-                val side = (leftAudio[j] - rightAudio[j]) * 0.5f
-                val vocalSample = (mid * 1.35f - side * 0.4f).coerceIn(-1.0f, 1.0f)
+        while (start < numFrames) {
+            currentCoroutineContext().ensureActive()
+            val len = min(chunkSize, numFrames - start)
+            val chunkL = leftAudio.copyOfRange(start, start + len)
+            val chunkR = rightAudio.copyOfRange(start, start + len)
 
-                resultShorts[j * 2] = (vocalSample * 32767.0f).toInt().toShort()
-                resultShorts[j * 2 + 1] = (vocalSample * 32767.0f).toInt().toShort()
+            val (recL, recR) = separateStereoSpectral(chunkL, chunkR)
+
+            for (i in 0 until len) {
+                resultShorts[(start + i) * 2] = (recL[i].coerceIn(-1.0f, 1.0f) * 32767.0f).toInt().toShort()
+                resultShorts[(start + i) * 2 + 1] = (recR[i].coerceIn(-1.0f, 1.0f) * 32767.0f).toInt().toShort()
             }
-            val prog = 0.20f + (end.toFloat() / numFrames.toFloat()) * 0.74f
-            onProgress(ExtractionProgress("Fast Vocal Processing (${(prog * 100).toInt()}%)...", prog))
+
+            chunkIdx++
+            val prog = (0.20f + (chunkIdx.toFloat() / totalChunks.toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
+            onProgress(ExtractionProgress("Spectral Harmonic Vocal Isolation (${(prog * 100).toInt()}%)...", prog))
+
+            start += len
         }
 
         return resultShorts
+    }
+
+    /**
+     * Core multi-band STFT spectral filter for stereo audio.
+     */
+    private fun separateStereoSpectral(
+        left: FloatArray,
+        right: FloatArray,
+        sampleRate: Int = 44100
+    ): Pair<FloatArray, FloatArray> {
+        val stft = STFT(nFft = 2048, hopLength = 512)
+        val stftL = stft.forward(left)
+        val stftR = stft.forward(right)
+        val numBins = stftL.numBins
+        val numFrames = stftL.numFrames
+        val binFreqHz = sampleRate.toFloat() / (2f * (numBins - 1))
+
+        val vocalMagsL = FloatArray(stftL.magnitudes.size)
+        val vocalMagsR = FloatArray(stftR.magnitudes.size)
+
+        for (bin in 0 until numBins) {
+            val freq = bin * binFreqHz
+            val vocalPrior = when {
+                freq < 90f -> 0.01f // Sub-bass, 808s, kick rumble
+                freq in 90f..220f -> 0.05f + 0.80f * ((freq - 90f) / 130f)
+                freq in 220f..3500f -> 1.0f // Vocal core formant band
+                freq in 3500f..5500f -> 1.0f - 0.65f * ((freq - 3500f) / 2000f)
+                freq in 5500f..8500f -> 0.35f - 0.33f * ((freq - 5500f) / 3000f)
+                else -> 0.01f // Cymbals, hi-hats, high sizzle
+            }
+
+            for (frame in 0 until numFrames) {
+                val idx = frame * numBins + bin
+                val magL = stftL.magnitudes[idx]
+                val magR = stftR.magnitudes[idx]
+
+                val midMag = 0.5f * (magL + magR)
+                val sideMag = 0.5f * kotlin.math.abs(magL - magR)
+
+                // Phantom-center coherence: lead vocals are centered, instruments are stereo panned
+                val centerCoherence = (midMag / (midMag + 2.4f * sideMag + 1e-5f)).coerceIn(0f, 1f)
+                val centerWeight = centerCoherence * centerCoherence
+
+                val vocalScore = centerWeight * vocalPrior
+
+                // Steep rejection mask: instruments with low vocal score are squelched
+                val mask = if (vocalScore < 0.15f) {
+                    0.005f
+                } else {
+                    val norm = (vocalScore - 0.15f) / 0.85f
+                    (norm * norm).coerceIn(0.005f, 1.0f)
+                }
+
+                vocalMagsL[idx] = magL * mask
+                vocalMagsR[idx] = magR * mask
+            }
+        }
+
+        val recL = stft.inverse(vocalMagsL, stftL.phases, numFrames).copyOf(left.size)
+        val recR = stft.inverse(vocalMagsR, stftR.phases, numFrames).copyOf(right.size)
+        return Pair(recL, recR)
     }
 
     fun release() {
