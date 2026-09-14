@@ -23,6 +23,7 @@ import com.example.vocalplayer.neural.NeuralModelProfile
 import com.example.vocalplayer.neural.NeuralSeparationEngine
 import com.example.vocalplayer.neural.SeparationConfig
 import com.example.vocalplayer.neural.SeparationMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(UnstableApi::class)
 class VocalVideoPlayer(private val context: Context) {
@@ -56,6 +58,7 @@ class VocalVideoPlayer(private val context: Context) {
     private var progressTrackerJob: Job? = null
     private var extractionJob: Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+    @Volatile private var latestPlaybackPositionMs: Long = 0L
 
     init {
         // Setup Media3 ExoPlayer with our custom neural audio processing sink and optimized LoadControl
@@ -86,7 +89,7 @@ class VocalVideoPlayer(private val context: Context) {
             .setLoadControl(loadControl)
             .build()
 
-        audioProcessor.positionMsProvider = { exoPlayer.currentPosition }
+        audioProcessor.positionMsProvider = { latestPlaybackPositionMs }
         audioProcessor.isVocalOnlyEnabled = false
 
         setupPlayerListeners()
@@ -110,10 +113,12 @@ class VocalVideoPlayer(private val context: Context) {
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val isBuffering = playbackState == Player.STATE_BUFFERING
+                val isEnded = playbackState == Player.STATE_ENDED
                 val duration = if (exoPlayer.duration > 0) exoPlayer.duration else 0L
                 _uiState.update {
                     it.copy(
                         isBuffering = isBuffering,
+                        isEnded = isEnded,
                         durationMs = duration,
                         hasMediaLoaded = it.mediaUri != null
                     )
@@ -153,6 +158,7 @@ class VocalVideoPlayer(private val context: Context) {
         progressTrackerJob = scope.launch {
             while (isActive) {
                 val pos = exoPlayer.currentPosition
+                latestPlaybackPositionMs = pos
                 val dur = if (exoPlayer.duration > 0) exoPlayer.duration else 0L
                 _uiState.update {
                     it.copy(
@@ -178,6 +184,7 @@ class VocalVideoPlayer(private val context: Context) {
             }
         }
         if (exoPlayer.playbackState == Player.STATE_ENDED) {
+            latestPlaybackPositionMs = 0L
             exoPlayer.seekTo(0L)
             audioProcessor.resetStreamPosition(0L)
         }
@@ -197,6 +204,7 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun seekTo(positionMs: Long) {
+        latestPlaybackPositionMs = positionMs
         exoPlayer.seekTo(positionMs)
         audioProcessor.resetStreamPosition(positionMs)
         _uiState.update { it.copy(currentPositionMs = positionMs) }
@@ -297,11 +305,14 @@ class VocalVideoPlayer(private val context: Context) {
             }
 
             if (success) {
-                cacheManager.setActiveMedia(uri)
-                audioProcessor.activeMediaUri = uri
-                audioProcessor.resetStreamPosition(0L)
-                exoPlayer.seekTo(0L)
-                exoPlayer.play()
+                withContext(Dispatchers.Main) {
+                    cacheManager.setActiveMedia(uri)
+                    audioProcessor.activeMediaUri = uri
+                    latestPlaybackPositionMs = 0L
+                    audioProcessor.resetStreamPosition(0L)
+                    exoPlayer.seekTo(0L)
+                    exoPlayer.play()
+                }
             }
 
             _uiState.update {

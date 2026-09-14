@@ -45,6 +45,7 @@ class NeuralAudioProcessor(
 
     // Current playback sample index for stream alignment
     private var playbackSampleIndex: Long = 0L
+    private val atomicPositionMs = java.util.concurrent.atomic.AtomicLong(0L)
 
     // Transition smoothing for toggle
     private var currentMixAlpha = 0.0f
@@ -185,7 +186,11 @@ class NeuralAudioProcessor(
         currentMixAlpha = if (isVocalOnlyEnabled) vocalMixRatio else 0.0f
         targetMixAlpha = currentMixAlpha
 
-        val currentMs = positionMsProvider?.invoke() ?: 0L
+        val currentMs = try {
+            positionMsProvider?.invoke() ?: atomicPositionMs.get()
+        } catch (e: Throwable) {
+            atomicPositionMs.get()
+        }
         val sampleRate = if (inputAudioFormat.sampleRate > 0) inputAudioFormat.sampleRate else 44100
         val channelCount = if (inputAudioFormat.channelCount > 0) inputAudioFormat.channelCount else 2
         playbackSampleIndex = ((currentMs * sampleRate.toLong()) / 1000L) * channelCount.toLong()
@@ -197,6 +202,7 @@ class NeuralAudioProcessor(
     }
 
     fun resetStreamPosition(positionMs: Long = 0L) {
+        atomicPositionMs.set(positionMs)
         val sampleRate = if (inputAudioFormat.sampleRate > 0) inputAudioFormat.sampleRate else 44100
         val channelCount = if (inputAudioFormat.channelCount > 0) inputAudioFormat.channelCount else 2
         playbackSampleIndex = ((positionMs * sampleRate.toLong()) / 1000L) * channelCount.toLong()

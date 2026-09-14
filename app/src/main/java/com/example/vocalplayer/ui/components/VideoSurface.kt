@@ -65,6 +65,7 @@ fun VideoSurface(
     isBuffering: Boolean,
     isVocalOnly: Boolean,
     isPlaying: Boolean = false,
+    isEnded: Boolean = false,
     isExtractingVocals: Boolean = false,
     extractionProgress: Float = 0f,
     onTogglePlayPause: () -> Unit = {},
@@ -143,7 +144,6 @@ fun VideoSurface(
 
             // Center Play / Replay Overlay button when paused/ended
             if (!isPlaying && !isBuffering && !isExtractingVocals) {
-                val isEnded = exoPlayer.playbackState == Player.STATE_ENDED
                 Box(
                     modifier = Modifier
                         .size(60.dp)

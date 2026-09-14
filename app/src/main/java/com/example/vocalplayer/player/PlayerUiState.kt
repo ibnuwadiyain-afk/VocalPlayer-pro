@@ -23,6 +23,7 @@ data class PlayerUiState(
     val volume: Float = 1.0f,
     val isFullscreen: Boolean = false,
     val isBuffering: Boolean = false,
+    val isEnded: Boolean = false,
     val hasMediaLoaded: Boolean = false,
 
     // Offline Demucs Vocal Extraction & Caching state
