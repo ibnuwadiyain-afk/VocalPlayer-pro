@@ -42,6 +42,7 @@ class VocalVideoPlayer(private val context: Context) {
     private val modelManager = ModelManager(context)
     private val sampleClipsManager = SampleClipsManager(context, cacheManager)
     val offlineVocalSeparator = com.example.vocalplayer.neural.OfflineVocalSeparator(context, cacheManager, modelManager)
+    val videoExporter = com.example.vocalplayer.export.VocalVideoExporter(context)
 
     private val separationEngine = NeuralSeparationEngine(
         context = context,
@@ -57,6 +58,7 @@ class VocalVideoPlayer(private val context: Context) {
 
     private var progressTrackerJob: Job? = null
     private var extractionJob: Job? = null
+    private var exportJob: Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     @Volatile private var latestPlaybackPositionMs: Long = 0L
 
@@ -361,6 +363,122 @@ class VocalVideoPlayer(private val context: Context) {
         }
     }
 
+    fun exportMutedInstrumentsVideo() {
+        val currentUri = _uiState.value.mediaUri
+        if (currentUri == null) {
+            _uiState.update { it.copy(statusMessage = "Please load a video or audio file first") }
+            return
+        }
+
+        val pcmData = cacheManager.getCachedPcm(currentUri)
+        if (pcmData == null || pcmData.isEmpty()) {
+            _uiState.update { it.copy(statusMessage = "Please isolate and cache vocals first before exporting") }
+            return
+        }
+
+        exportJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isExportingVideo = true,
+                exportProgress = 0.05f,
+                exportStage = "Preparing video export...",
+                exportResult = null,
+                exportErrorMessage = null,
+                showExportDialog = true
+            )
+        }
+
+        exportJob = scope.launch(Dispatchers.Default) {
+            try {
+                val result = videoExporter.exportMutedInstrumentsVideo(
+                    sourceUri = currentUri,
+                    cachedVocalPcm = pcmData,
+                    title = _uiState.value.mediaTitle,
+                    onProgress = { prog, stage ->
+                        _uiState.update {
+                            it.copy(
+                                exportProgress = prog,
+                                exportStage = stage
+                            )
+                        }
+                    }
+                )
+
+                _uiState.update {
+                    it.copy(
+                        isExportingVideo = false,
+                        exportProgress = 1.0f,
+                        exportStage = "Export Complete",
+                        exportResult = result,
+                        statusMessage = "Video exported successfully!"
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _uiState.update {
+                    it.copy(
+                        isExportingVideo = false,
+                        exportStage = null,
+                        showExportDialog = false,
+                        statusMessage = "Video export cancelled"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Video export failed: ${e.message}", e)
+                _uiState.update {
+                    it.copy(
+                        isExportingVideo = false,
+                        exportErrorMessage = "Export failed: ${e.localizedMessage ?: "Unknown error"}",
+                        statusMessage = "Export failed"
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelExport() {
+        exportJob?.cancel()
+        exportJob = null
+        _uiState.update {
+            it.copy(
+                isExportingVideo = false,
+                exportStage = null,
+                showExportDialog = false,
+                statusMessage = "Video export cancelled"
+            )
+        }
+    }
+
+    fun dismissExportDialog() {
+        _uiState.update { it.copy(showExportDialog = false) }
+    }
+
+    fun shareExportedVideo() {
+        val result = _uiState.value.exportResult ?: return
+        try {
+            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(android.content.Intent.EXTRA_STREAM, result.fileProviderUri)
+                putExtra(android.content.Intent.EXTRA_SUBJECT, result.title)
+                putExtra(android.content.Intent.EXTRA_TEXT, "Exported with VocalPlayer (Instruments Muted)")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val chooser = android.content.Intent.createChooser(shareIntent, "Share Muted Instruments Video").apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to share video: ${e.message}", e)
+            _uiState.update { it.copy(statusMessage = "Could not open share sheet: ${e.localizedMessage}") }
+        }
+    }
+
+    fun playExportedVideo() {
+        val result = _uiState.value.exportResult ?: return
+        _uiState.update { it.copy(showExportDialog = false) }
+        loadMedia(result.fileProviderUri, result.title)
+    }
+
     fun setSeparationMode(mode: SeparationMode) {
         val newConfig = separationEngine.config.copy(mode = mode, threadCount = mode.defaultThreads)
         separationEngine.updateConfig(newConfig)
@@ -507,6 +625,7 @@ class VocalVideoPlayer(private val context: Context) {
     fun release() {
         stopProgressTracker()
         cancelVocalExtraction()
+        cancelExport()
         exoPlayer.release()
         audioProcessor.activeMediaUri = null
         separationEngine.release()

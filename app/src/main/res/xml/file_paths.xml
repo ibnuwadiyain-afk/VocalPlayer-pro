@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="exports" path="exports/" />
+    <cache-path name="demo_clips" path="demo_clips/" />
+    <cache-path name="vocal_stems_cache" path="vocal_stems_cache/" />
+    <external-cache-path name="ext_exports" path="exports/" />
+    <external-files-path name="ext_files" path="." />
+    <files-path name="files" path="." />
+</paths>

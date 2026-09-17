@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
@@ -75,6 +76,7 @@ import com.example.vocalplayer.ui.components.VocalToggleBar
 import com.example.vocalplayer.ui.components.WaveformVisualizer
 import com.example.vocalplayer.ui.dialogs.BenchmarkDialog
 import com.example.vocalplayer.ui.dialogs.DemoClipsDialog
+import com.example.vocalplayer.ui.dialogs.ExportVideoDialog
 import com.example.vocalplayer.ui.dialogs.ModelManagerDialog
 import com.example.vocalplayer.ui.dialogs.SettingsDialog
 
@@ -223,6 +225,19 @@ fun VocalPlayerScreen(
                             )
                         }
 
+                        if (uiState.isVocalCached) {
+                            IconButton(
+                                onClick = { player.exportMutedInstrumentsVideo() },
+                                modifier = Modifier.testTag("action_export_video")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FileDownload,
+                                    contentDescription = "Export Video (Instruments Muted)",
+                                    tint = VocalCyan
+                                )
+                            }
+                        }
+
                         IconButton(
                             onClick = { player.showModelManagerDialog(true) },
                             modifier = Modifier.testTag("action_models")
@@ -312,7 +327,8 @@ fun VocalPlayerScreen(
                     hasMediaLoaded = uiState.hasMediaLoaded,
                     onStartExtraction = { player.extractVocalsOffline() },
                     onCancelExtraction = { player.cancelVocalExtraction() },
-                    onClearCache = { player.clearVocalCache() }
+                    onClearCache = { player.clearVocalCache() },
+                    onExportVideo = { player.exportMutedInstrumentsVideo() }
                 )
 
                 // Waveform Spectrum Visualizer
@@ -456,6 +472,20 @@ fun VocalPlayerScreen(
             demoClips = uiState.demoClips,
             onSelectClip = { clip -> player.loadMedia(clip.uri, clip.title) },
             onDismiss = { player.showDemoClipsDialog(false) }
+        )
+    }
+
+    if (uiState.showExportDialog) {
+        ExportVideoDialog(
+            isExporting = uiState.isExportingVideo,
+            progress = uiState.exportProgress,
+            stage = uiState.exportStage,
+            exportResult = uiState.exportResult,
+            errorMessage = uiState.exportErrorMessage,
+            onShareVideo = { player.shareExportedVideo() },
+            onPlayExportedVideo = { player.playExportedVideo() },
+            onCancelExport = { player.cancelExport() },
+            onDismiss = { player.dismissExportDialog() }
         )
     }
 }

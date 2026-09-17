@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.StudioCardBorder
+import com.example.ui.theme.StudioDarkBg
 import com.example.ui.theme.StudioSurface
 import com.example.ui.theme.StudioSurfaceVariant
 import com.example.ui.theme.TextPrimary
@@ -64,6 +66,7 @@ fun OfflineExtractionCard(
     onStartExtraction: () -> Unit,
     onCancelExtraction: () -> Unit,
     onClearCache: () -> Unit,
+    onExportVideo: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (!hasMediaLoaded && !isExtracting) return
@@ -251,6 +254,32 @@ fun OfflineExtractionCard(
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
+                        }
+                    }
+
+                    if (onExportVideo != null) {
+                        Button(
+                            onClick = onExportVideo,
+                            colors = ButtonDefaults.buttonColors(containerColor = VocalCyan),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .testTag("export_muted_video_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FileDownload,
+                                contentDescription = null,
+                                tint = StudioDarkBg,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Export Video (Instruments Muted)",
+                                color = StudioDarkBg,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }

@@ -55,6 +55,14 @@ data class PlayerUiState(
     val benchmarkResult: BenchmarkResult? = null,
     val isBenchmarking: Boolean = false,
 
+    // Video Export (Instruments Muted) state
+    val isExportingVideo: Boolean = false,
+    val exportProgress: Float = 0.0f,
+    val exportStage: String? = null,
+    val exportResult: com.example.vocalplayer.export.ExportResult? = null,
+    val exportErrorMessage: String? = null,
+    val showExportDialog: Boolean = false,
+
     // Dialog sheets
     val showModelManagerDialog: Boolean = false,
     val showSettingsDialog: Boolean = false,
