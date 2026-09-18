@@ -99,12 +99,12 @@ class NeuralAudioProcessor(
             inputBuffer.position(inputBuffer.limit())
 
             val uri = activeMediaUri
-            val isCached = uri != null && cacheManager != null && cacheManager.isVocalCached(uri)
+            val currentCache = cacheManager
             val inv32768 = 1.0f / 32768.0f
 
-            if (isCached && uri != null && cacheManager != null) {
+            if (uri != null && currentCache != null && currentCache.isVocalCached(uri)) {
                 // ZERO-LAG CACHED PLAYBACK: Read pre-extracted vocal stem directly (supports active streaming)
-                val readCount = cacheManager.readVocalSlice(uri, playbackSampleIndex, availableShorts, cachedVocalShorts)
+                val readCount = currentCache.readVocalSlice(uri, playbackSampleIndex, availableShorts, cachedVocalShorts)
                 val stepAlpha = (targetMixAlpha - currentMixAlpha) / availableShorts.toFloat().coerceAtLeast(1f)
 
                 var vocalEnergySum = 0f
