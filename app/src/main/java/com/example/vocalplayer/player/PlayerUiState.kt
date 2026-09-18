@@ -32,6 +32,7 @@ data class PlayerUiState(
     val isStreamingVocal: Boolean = false,
     val streamedDurationMs: Long = 0L,
     val totalExtractionDurationMs: Long = 0L,
+    val extractionElapsedSec: Long = 0L,
     val extractionStage: String? = null,
     val extractionProgress: Float = 0.0f,
     val cacheSizeMb: Float = 0.0f,
@@ -72,4 +73,12 @@ data class PlayerUiState(
     val showBenchmarkDialog: Boolean = false,
     val showDemoClipsDialog: Boolean = false,
     val statusMessage: String? = null
-)
+) {
+    /** True when at least one separated vocal audio chunk is available to play. */
+    val hasVocalChunksGenerated: Boolean
+        get() = isVocalCached || isStreamingVocal || (streamedDurationMs > 0L)
+
+    /** Prevents toggling vocal-only mode until separated vocal audio chunks are generated. */
+    val canToggleVocalOnly: Boolean
+        get() = hasVocalChunksGenerated
+}

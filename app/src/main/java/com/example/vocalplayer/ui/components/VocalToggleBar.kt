@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
@@ -57,6 +58,7 @@ import com.example.ui.theme.VocalPurple
 fun VocalToggleBar(
     isVocalOnly: Boolean,
     vocalIntensity: Float,
+    canToggleVocalOnly: Boolean = true,
     onToggle: () -> Unit,
     onIntensityChange: (Float) -> Unit,
     modifier: Modifier = Modifier
@@ -124,6 +126,8 @@ fun VocalToggleBar(
                 }
 
                 // Vocal Only Segment
+                val vocalOnlyAlpha = if (canToggleVocalOnly || isVocalOnly) 1f else 0.45f
+
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -143,27 +147,58 @@ fun VocalToggleBar(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { if (!isVocalOnly) onToggle() }
+                            onClick = {
+                                if (canToggleVocalOnly || isVocalOnly) {
+                                    onToggle()
+                                } else {
+                                    // Trigger status feedback explaining chunks are generating
+                                    onToggle()
+                                }
+                            }
                         )
                         .testTag("toggle_vocal_only"),
                     contentAlignment = Alignment.Center
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Mic,
+                            imageVector = if (canToggleVocalOnly || isVocalOnly) Icons.Default.Mic else Icons.Default.HourglassEmpty,
                             contentDescription = "Vocal Only",
-                            tint = if (isVocalOnly) StudioDarkBg else TextTertiary,
+                            tint = if (isVocalOnly) StudioDarkBg else TextTertiary.copy(alpha = vocalOnlyAlpha),
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "VOCAL ONLY",
-                            color = if (isVocalOnly) StudioDarkBg else TextSecondary,
+                            text = when {
+                                isVocalOnly -> "VOCAL ONLY"
+                                !canToggleVocalOnly -> "GENERATING..."
+                                else -> "VOCAL ONLY"
+                            },
+                            color = if (isVocalOnly) StudioDarkBg else TextSecondary.copy(alpha = vocalOnlyAlpha),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
                 }
+            }
+        }
+
+        // Info message when vocal toggle is waiting for first chunk
+        if (!canToggleVocalOnly && !isVocalOnly) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "⏳ Vocal Only unlocks automatically once first separated chunk is ready",
+                    color = TextTertiary,
+                    fontSize = 10.sp
+                )
             }
         }
 

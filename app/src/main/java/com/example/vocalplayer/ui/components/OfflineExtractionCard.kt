@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -32,6 +33,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +67,7 @@ fun OfflineExtractionCard(
     hasMediaLoaded: Boolean,
     isStreaming: Boolean = false,
     streamedDurationMs: Long = 0L,
+    elapsedSeconds: Long = 0L,
     onStartExtraction: () -> Unit,
     onCancelExtraction: () -> Unit,
     onClearCache: () -> Unit,
@@ -72,6 +75,12 @@ fun OfflineExtractionCard(
     modifier: Modifier = Modifier
 ) {
     if (!hasMediaLoaded && !isExtracting) return
+
+    val formattedElapsed = remember(elapsedSeconds) {
+        val m = elapsedSeconds / 60
+        val s = elapsedSeconds % 60
+        String.format(java.util.Locale.US, "%02d:%02d", m, s)
+    }
 
     val borderColor = when {
         isCached -> VocalGreen.copy(alpha = 0.5f)
@@ -143,16 +152,45 @@ fun OfflineExtractionCard(
                             }
                         }
 
-                        IconButton(
-                            onClick = onCancelExtraction,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Cancel",
-                                tint = TextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Elapsed Time Badge
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(StudioDarkBg)
+                                    .border(1.dp, StudioCardBorder, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Timer,
+                                        contentDescription = "Elapsed time",
+                                        tint = if (isStreaming) VocalGreen else VocalCyan,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = formattedElapsed,
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(4.dp))
+
+                            IconButton(
+                                onClick = onCancelExtraction,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancel",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
 
@@ -165,7 +203,7 @@ fun OfflineExtractionCard(
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "⚡ Isolated vocal playback active • Smoothly streaming while remaining chunks process",
+                                text = "⚡ Isolated vocal playback active • Elapsed: $formattedElapsed • ${streamedDurationMs / 1000}s ready",
                                 color = VocalGreen,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -188,7 +226,7 @@ fun OfflineExtractionCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = if (isStreaming) "Audio plays continuously without waiting" else "Separating vocals into streaming chunks",
+                            text = if (isStreaming) "Audio plays continuously • $formattedElapsed elapsed" else "Elapsed: $formattedElapsed • Separating chunks",
                             color = TextSecondary,
                             fontSize = 10.sp
                         )
@@ -253,7 +291,11 @@ fun OfflineExtractionCard(
                                     }
                                 }
                                 Text(
-                                    text = "Dynamic Quantized INT8 ONNX • ${"%.1f".format(cacheSizeMb)} MB Cached",
+                                    text = if (elapsedSeconds > 0) {
+                                        "Extracted in $formattedElapsed • ${"%.1f".format(cacheSizeMb)} MB Cached"
+                                    } else {
+                                        "Dynamic Quantized INT8 ONNX • ${"%.1f".format(cacheSizeMb)} MB Cached"
+                                    },
                                     color = TextSecondary,
                                     fontSize = 11.sp
                                 )

@@ -257,6 +257,48 @@ class ExampleUnitTest {
       tempFile.delete()
     }
   }
+
+  @Test
+  fun testVocalToggleRestrictionUntilChunksGenerated() {
+    // 1. Initially uncached and not streaming: cannot toggle vocal only
+    val initialState = com.example.vocalplayer.player.PlayerUiState(
+      isVocalCached = false,
+      isStreamingVocal = false,
+      streamedDurationMs = 0L
+    )
+    assertFalse(initialState.canToggleVocalOnly)
+    assertFalse(initialState.hasVocalChunksGenerated)
+
+    // 2. Chunks begin streaming: vocal toggle becomes unlocked
+    val streamingState = initialState.copy(
+      isStreamingVocal = true,
+      streamedDurationMs = 4000L
+    )
+    assertTrue(streamingState.canToggleVocalOnly)
+    assertTrue(streamingState.hasVocalChunksGenerated)
+
+    // 3. Fully cached: vocal toggle is unlocked
+    val cachedState = initialState.copy(
+      isVocalCached = true,
+      streamedDurationMs = 0L
+    )
+    assertTrue(cachedState.canToggleVocalOnly)
+    assertTrue(cachedState.hasVocalChunksGenerated)
+  }
+
+  @Test
+  fun testElapsedTimerDurationFormatting() {
+    fun formatElapsed(seconds: Long): String {
+      val m = seconds / 60
+      val s = seconds % 60
+      return String.format(java.util.Locale.US, "%02d:%02d", m, s)
+    }
+
+    assertEquals("00:00", formatElapsed(0L))
+    assertEquals("00:15", formatElapsed(15L))
+    assertEquals("01:05", formatElapsed(65L))
+    assertEquals("12:34", formatElapsed(754L))
+  }
 }
 
 

@@ -137,6 +137,10 @@ fun VocalPlayerScreen(
                 isVocalOnly = uiState.isVocalOnly,
                 isPlaying = uiState.isPlaying,
                 isEnded = uiState.isEnded,
+                isExtractingVocals = uiState.isExtractingVocals,
+                isStreamingVocal = uiState.isStreamingVocal,
+                extractionProgress = uiState.extractionProgress,
+                extractionElapsedSec = uiState.extractionElapsedSec,
                 onTogglePlayPause = { player.togglePlayPause() },
                 onOpenFilePicker = {
                     videoPickerLauncher.launch(
@@ -286,7 +290,9 @@ fun VocalPlayerScreen(
                     isPlaying = uiState.isPlaying,
                     isEnded = uiState.isEnded,
                     isExtractingVocals = uiState.isExtractingVocals,
+                    isStreamingVocal = uiState.isStreamingVocal,
                     extractionProgress = uiState.extractionProgress,
+                    extractionElapsedSec = uiState.extractionElapsedSec,
                     onTogglePlayPause = { player.togglePlayPause() },
                     onOpenFilePicker = {
                         videoPickerLauncher.launch(
@@ -323,6 +329,7 @@ fun VocalPlayerScreen(
                     isCached = uiState.isVocalCached,
                     isStreaming = uiState.isStreamingVocal,
                     streamedDurationMs = uiState.streamedDurationMs,
+                    elapsedSeconds = uiState.extractionElapsedSec,
                     extractionStage = uiState.extractionStage,
                     extractionProgress = uiState.extractionProgress,
                     cacheSizeMb = uiState.cacheSizeMb,
@@ -345,6 +352,7 @@ fun VocalPlayerScreen(
                 VocalToggleBar(
                     isVocalOnly = uiState.isVocalOnly,
                     vocalIntensity = uiState.vocalIntensity,
+                    canToggleVocalOnly = uiState.canToggleVocalOnly,
                     onToggle = { player.toggleVocalOnly() },
                     onIntensityChange = { ratio -> player.setVocalIntensity(ratio) }
                 )

@@ -67,13 +67,20 @@ fun VideoSurface(
     isPlaying: Boolean = false,
     isEnded: Boolean = false,
     isExtractingVocals: Boolean = false,
+    isStreamingVocal: Boolean = false,
     extractionProgress: Float = 0f,
+    extractionElapsedSec: Long = 0L,
     onTogglePlayPause: () -> Unit = {},
     onOpenFilePicker: () -> Unit,
     onOpenDemos: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val formattedElapsed = remember(extractionElapsedSec) {
+        val m = extractionElapsedSec / 60
+        val s = extractionElapsedSec % 60
+        String.format(java.util.Locale.US, "%02d:%02d", m, s)
+    }
 
     Box(
         modifier = modifier
@@ -109,8 +116,8 @@ fun VideoSurface(
                 )
             }
 
-            // Extraction overlay when Demucs is processing
-            if (isExtractingVocals) {
+            // Extraction overlay when Demucs is processing initial chunk
+            if (isExtractingVocals && !isStreamingVocal) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -133,12 +140,32 @@ fun VideoSurface(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Auto-plays with 0ms lag once stem is ready",
+                            text = "Elapsed: $formattedElapsed • Auto-plays once first chunk is ready",
                             color = TextSecondary,
                             fontSize = 11.sp
                         )
                     }
+                }
+            }
+
+            // Streaming overlay chip when video is playing live while remaining chunks process
+            if (isExtractingVocals && isStreamingVocal) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.75f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "⚡ Live Stream • Elapsed: $formattedElapsed (${(extractionProgress * 100).toInt()}%)",
+                        color = com.example.ui.theme.VocalGreen,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 

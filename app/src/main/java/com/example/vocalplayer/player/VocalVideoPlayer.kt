@@ -58,6 +58,7 @@ class VocalVideoPlayer(private val context: Context) {
 
     private var progressTrackerJob: Job? = null
     private var extractionJob: Job? = null
+    private var extractionTickerJob: Job? = null
     private var exportJob: Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     @Volatile private var latestPlaybackPositionMs: Long = 0L
@@ -223,6 +224,12 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun toggleVocalOnly() {
+        if (!_uiState.value.isVocalOnly && !_uiState.value.canToggleVocalOnly) {
+            _uiState.update {
+                it.copy(statusMessage = "Please wait: separated vocal audio chunks are still generating...")
+            }
+            return
+        }
         val newState = !_uiState.value.isVocalOnly
         audioProcessor.isVocalOnlyEnabled = newState
         _uiState.update { it.copy(isVocalOnly = newState) }
@@ -254,6 +261,9 @@ class VocalVideoPlayer(private val context: Context) {
                 hasMediaLoaded = true,
                 currentPositionMs = 0L,
                 isVocalCached = isCached,
+                isStreamingVocal = false,
+                streamedDurationMs = 0L,
+                extractionElapsedSec = 0L,
                 cacheSizeMb = cacheManager.getCacheSizeMb(),
                 statusMessage = if (isCached) "Demucs Vocals Loaded (0ms Lag Cached Playback)" else null
             )
@@ -273,6 +283,13 @@ class VocalVideoPlayer(private val context: Context) {
             exoPlayer.play()
         } else {
             // Keep at start while extraction isolates vocals in background
+            audioProcessor.isVocalOnlyEnabled = false
+            _uiState.update {
+                it.copy(
+                    isVocalOnly = false,
+                    statusMessage = "Analyzing audio... Vocal Only toggle unlocks as soon as first chunk is ready."
+                )
+            }
             exoPlayer.pause()
             exoPlayer.seekTo(0L)
             extractVocalsOffline(uri)
@@ -297,11 +314,23 @@ class VocalVideoPlayer(private val context: Context) {
         }
 
         extractionJob?.cancel()
+        extractionTickerJob?.cancel()
+
+        val startTimestamp = System.currentTimeMillis()
+        extractionTickerJob = scope.launch(Dispatchers.Default) {
+            while (isActive) {
+                val elapsedSec = (System.currentTimeMillis() - startTimestamp) / 1000L
+                _uiState.update { it.copy(extractionElapsedSec = elapsedSec) }
+                delay(500)
+            }
+        }
+
         extractionJob = scope.launch {
             _uiState.update {
                 it.copy(
                     isExtractingVocals = true,
                     isStreamingVocal = false,
+                    extractionElapsedSec = 0L,
                     extractionStage = "Starting offline vocal isolation...",
                     extractionProgress = 0.0f
                 )
@@ -309,64 +338,69 @@ class VocalVideoPlayer(private val context: Context) {
 
             var firstChunkActivated = false
 
-            val success = offlineVocalSeparator.extractAndCacheVocals(uri) { prog ->
-                _uiState.update {
-                    it.copy(
-                        extractionStage = prog.stage,
-                        extractionProgress = prog.progress,
-                        isStreamingVocal = prog.isChunkReady,
-                        streamedDurationMs = prog.streamedDurationMs,
-                        totalExtractionDurationMs = prog.totalDurationMs
-                    )
-                }
+            try {
+                val success = offlineVocalSeparator.extractAndCacheVocals(uri) { prog ->
+                    _uiState.update {
+                        it.copy(
+                            extractionStage = prog.stage,
+                            extractionProgress = prog.progress,
+                            isStreamingVocal = prog.isChunkReady,
+                            streamedDurationMs = prog.streamedDurationMs,
+                            totalExtractionDurationMs = prog.totalDurationMs
+                        )
+                    }
 
-                // IMMEDIATELY play separated vocal chunks smoothly while processing the rest
-                if (prog.isChunkReady && !firstChunkActivated) {
-                    firstChunkActivated = true
-                    scope.launch(Dispatchers.Main) {
-                        cacheManager.setActiveMedia(uri)
-                        audioProcessor.activeMediaUri = uri
-                        audioProcessor.resetStreamPosition(exoPlayer.currentPosition)
-                        audioProcessor.isVocalOnlyEnabled = true
-                        _uiState.update {
-                            it.copy(
-                                isVocalCached = true,
-                                isVocalOnly = true,
-                                isStreamingVocal = true,
-                                statusMessage = "Streaming Isolated Vocals Live (Processing rest in background...)"
-                            )
-                        }
-                        if (!exoPlayer.isPlaying) {
-                            exoPlayer.play()
+                    // IMMEDIATELY play separated vocal chunks smoothly while processing the rest
+                    if (prog.isChunkReady && !firstChunkActivated) {
+                        firstChunkActivated = true
+                        scope.launch(Dispatchers.Main) {
+                            cacheManager.setActiveMedia(uri)
+                            audioProcessor.activeMediaUri = uri
+                            audioProcessor.resetStreamPosition(exoPlayer.currentPosition)
+                            audioProcessor.isVocalOnlyEnabled = true
+                            _uiState.update {
+                                it.copy(
+                                    isVocalCached = true,
+                                    isVocalOnly = true,
+                                    isStreamingVocal = true,
+                                    statusMessage = "Streaming Isolated Vocals Live (Processing rest in background...)"
+                                )
+                            }
+                            if (!exoPlayer.isPlaying) {
+                                exoPlayer.play()
+                            }
                         }
                     }
                 }
-            }
 
-            if (success) {
-                withContext(Dispatchers.Main) {
-                    cacheManager.setActiveMedia(uri)
-                    audioProcessor.activeMediaUri = uri
-                    audioProcessor.isVocalOnlyEnabled = true
+                if (success) {
+                    withContext(Dispatchers.Main) {
+                        cacheManager.setActiveMedia(uri)
+                        audioProcessor.activeMediaUri = uri
+                        audioProcessor.isVocalOnlyEnabled = true
+                        _uiState.update {
+                            it.copy(
+                                isExtractingVocals = false,
+                                isStreamingVocal = false,
+                                isVocalCached = true,
+                                isVocalOnly = true,
+                                cacheSizeMb = cacheManager.getCacheSizeMb(),
+                                statusMessage = "Isolated Vocals 100% Cached & Lag-Free!"
+                            )
+                        }
+                    }
+                } else {
                     _uiState.update {
                         it.copy(
                             isExtractingVocals = false,
                             isStreamingVocal = false,
-                            isVocalCached = true,
-                            isVocalOnly = true,
-                            cacheSizeMb = cacheManager.getCacheSizeMb(),
-                            statusMessage = "Isolated Vocals 100% Cached & Lag-Free!"
+                            statusMessage = "Extraction error"
                         )
                     }
                 }
-            } else {
-                _uiState.update {
-                    it.copy(
-                        isExtractingVocals = false,
-                        isStreamingVocal = false,
-                        statusMessage = "Extraction error"
-                    )
-                }
+            } finally {
+                extractionTickerJob?.cancel()
+                extractionTickerJob = null
             }
         }
     }
@@ -374,6 +408,8 @@ class VocalVideoPlayer(private val context: Context) {
     fun cancelVocalExtraction() {
         extractionJob?.cancel()
         extractionJob = null
+        extractionTickerJob?.cancel()
+        extractionTickerJob = null
         val uri = _uiState.value.mediaUri
         if (uri != null) {
             cacheManager.cancelStreamingSession(uri)
