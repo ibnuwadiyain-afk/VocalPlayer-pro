@@ -3,6 +3,7 @@ package com.example.vocalplayer.neural
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.example.vocalplayer.audio.DecodedAudioSource
 import com.example.vocalplayer.audio.MediaAudioDecoder
 import com.example.vocalplayer.cache.VocalCacheManager
 import com.example.vocalplayer.dsp.DemucsSpectrogramTransformer
@@ -61,101 +62,85 @@ class OfflineVocalSeparator(
         try {
             onProgress(ExtractionProgress("Decoding audio track...", 0.05f))
 
-            // Step 1: Decode media to PCM audio
-            val decoded = decoder.decodeToPcm(mediaUri) { decodeProg ->
+            // Step 1: Decode media to memory-efficient streaming PCM audio
+            val decodedSource = decoder.streamDecodedAudio(mediaUri) { decodeProg ->
                 onProgress(ExtractionProgress("Decoding audio (${(decodeProg * 100).toInt()}%)...", 0.05f + decodeProg * 0.10f))
             }
 
-            currentCoroutineContext().ensureActive()
+            try {
+                currentCoroutineContext().ensureActive()
 
-            val rawPcm = decoded.pcmShorts
-            val sampleRate = decoded.sampleRate
-            val channelCount = decoded.channelCount
-            val totalShorts = rawPcm.size
+                val sampleRate = decodedSource.sampleRate
+                val channelCount = decodedSource.channelCount
+                val totalShorts = decodedSource.totalSamples
 
-            if (totalShorts < 1000) {
-                Log.w(tag, "Audio track too short to process")
-                return@withContext false
-            }
-
-            // Convert interleaved PCM shorts to de-interleaved FloatArray (Left, Right)
-            val numFrames = if (channelCount >= 2) totalShorts / 2 else totalShorts
-            val leftAudio = FloatArray(numFrames)
-            val rightAudio = FloatArray(numFrames)
-
-            val invShort = 1.0f / 32768.0f
-            if (channelCount >= 2) {
-                for (i in 0 until numFrames) {
-                    leftAudio[i] = rawPcm[i * 2] * invShort
-                    rightAudio[i] = rawPcm[i * 2 + 1] * invShort
+                if (totalShorts < 1000) {
+                    Log.w(tag, "Audio track too short to process")
+                    return@withContext false
                 }
-            } else {
-                for (i in 0 until numFrames) {
-                    val sample = rawPcm[i] * invShort
-                    leftAudio[i] = sample
-                    rightAudio[i] = sample
-                }
-            }
 
-            currentCoroutineContext().ensureActive()
+                val numFrames = (if (channelCount >= 2) totalShorts / 2 else totalShorts).toInt()
 
-            // Step 2: Determine and initialize best available neural / spectral source separation model
-            val demucsProfile = modelManager.getAllModels().find { it.id == NeuralModelProfile.DEMUCS_INT8.id }
-            val demucsPath = demucsProfile?.modelPath ?: modelManager.downloader.getSecureModelFile("htdemucs_int8").absolutePath
+                // Step 2: Determine and initialize best available neural / spectral source separation model
+                val demucsProfile = modelManager.getAllModels().find { it.id == NeuralModelProfile.DEMUCS_INT8.id }
+                val demucsPath = demucsProfile?.modelPath ?: modelManager.downloader.getSecureModelFile("htdemucs_int8").absolutePath
 
-            val demucsLoaded = if (File(demucsPath).exists()) {
-                onProgress(ExtractionProgress("Loading Demucs Hybrid Transformer ONNX model...", 0.18f))
-                onnxRunner.loadDemucsModel(demucsPath)
-            } else false
+                val demucsLoaded = if (File(demucsPath).exists()) {
+                    onProgress(ExtractionProgress("Loading Demucs Hybrid Transformer ONNX model...", 0.18f))
+                    onnxRunner.loadDemucsModel(demucsPath)
+                } else false
 
-            val spleeterLoaded = if (!demucsLoaded) {
-                onProgress(ExtractionProgress("Loading Spleeter 2-stem ONNX model...", 0.18f))
-                try {
-                    val downloader = modelManager.downloader
-                    val vocalsFile = downloader.getSecureModelFile("spleeter_2stems_vocals").let {
-                        if (it.exists() && it.length() > 1024) it
-                        else downloader.copyAssetModelIfPresent("models/spleeter_2stems_vocals.onnx", "spleeter_2stems_vocals")
+                val spleeterLoaded = if (!demucsLoaded) {
+                    onProgress(ExtractionProgress("Loading Spleeter 2-stem ONNX model...", 0.18f))
+                    try {
+                        val downloader = modelManager.downloader
+                        val vocalsFile = downloader.getSecureModelFile("spleeter_2stems_vocals").let {
+                            if (it.exists() && it.length() > 1024) it
+                            else downloader.copyAssetModelIfPresent("models/spleeter_2stems_vocals.onnx", "spleeter_2stems_vocals")
+                        }
+                        val accFile = downloader.getSecureModelFile("spleeter_2stems_accompaniment").let {
+                            if (it.exists() && it.length() > 1024) it
+                            else downloader.copyAssetModelIfPresent("models/spleeter_2stems_accompaniment.onnx", "spleeter_2stems_accompaniment")
+                        }
+                        if (vocalsFile != null && vocalsFile.exists()) {
+                            onnxRunner.loadSpleeterModels(
+                                vocalsPath = vocalsFile.absolutePath,
+                                accompanimentPath = accFile?.absolutePath,
+                                threadCount = 4
+                            )
+                        } else false
+                    } catch (e: Exception) {
+                        Log.w(tag, "Spleeter asset staging error: ${e.message}")
+                        false
                     }
-                    val accFile = downloader.getSecureModelFile("spleeter_2stems_accompaniment").let {
-                        if (it.exists() && it.length() > 1024) it
-                        else downloader.copyAssetModelIfPresent("models/spleeter_2stems_accompaniment.onnx", "spleeter_2stems_accompaniment")
+                } else false
+
+                val separatedVocalsShorts: ShortArray = when {
+                    demucsLoaded -> {
+                        Log.i(tag, "Running Demucs v4 offline separation on $numFrames frames...")
+                        separateWithDemucsStream(decodedSource, numFrames, onProgress)
                     }
-                    if (vocalsFile != null && vocalsFile.exists()) {
-                        onnxRunner.loadSpleeterModels(
-                            vocalsPath = vocalsFile.absolutePath,
-                            accompanimentPath = accFile?.absolutePath,
-                            threadCount = 4
-                        )
-                    } else false
-                } catch (e: Exception) {
-                    Log.w(tag, "Spleeter asset staging error: ${e.message}")
-                    false
+                    spleeterLoaded -> {
+                        Log.i(tag, "Running Deezer Spleeter 2-stem ONNX neural isolation on $numFrames frames...")
+                        separateWithSpleeterStream(decodedSource, numFrames, onProgress)
+                    }
+                    else -> {
+                        Log.i(tag, "Running high-precision harmonic STFT spectral vocal isolation on $numFrames frames...")
+                        separateWithSpectralStream(decodedSource, numFrames, onProgress)
+                    }
                 }
-            } else false
 
-            val separatedVocalsShorts: ShortArray = when {
-                demucsLoaded -> {
-                    Log.i(tag, "Running Demucs v4 offline separation on $numFrames frames...")
-                    separateWithDemucs(leftAudio, rightAudio, numFrames, onProgress)
-                }
-                spleeterLoaded -> {
-                    Log.i(tag, "Running Deezer Spleeter 2-stem ONNX neural isolation on $numFrames frames...")
-                    separateWithSpleeter(leftAudio, rightAudio, numFrames, onProgress)
-                }
-                else -> {
-                    Log.i(tag, "Running high-precision harmonic STFT spectral vocal isolation on $numFrames frames...")
-                    separateWithSpectral(leftAudio, rightAudio, numFrames, onProgress)
-                }
+                currentCoroutineContext().ensureActive()
+                onProgress(ExtractionProgress("Saving vocal stem to cache...", 0.95f))
+
+                // Step 3: Save to cache
+                cacheManager.saveVocalPcm(mediaUri, separatedVocalsShorts, sampleRate, 2)
+                onProgress(ExtractionProgress("Vocal isolation complete!", 1.0f, isCompleted = true))
+                Log.i(tag, "Successfully processed and cached vocals for $mediaUri (${separatedVocalsShorts.size} shorts)")
+                true
+            } finally {
+                decodedSource.close()
             }
-
-            currentCoroutineContext().ensureActive()
-            onProgress(ExtractionProgress("Saving vocal stem to cache...", 0.95f))
-
-            // Step 3: Save to cache
-            cacheManager.saveVocalPcm(mediaUri, separatedVocalsShorts, sampleRate, 2)
-            onProgress(ExtractionProgress("Vocal isolation complete!", 1.0f, isCompleted = true))
-            Log.i(tag, "Successfully processed and cached vocals for $mediaUri (${separatedVocalsShorts.size} shorts)")
-            true
         } catch (e: CancellationException) {
             Log.i(tag, "Vocal extraction cancelled for $mediaUri")
             throw e
@@ -167,12 +152,12 @@ class OfflineVocalSeparator(
     }
 
     /**
-     * Slices audio into 7.8-second (343,980 sample) segments, runs Demucs neural inference,
-     * and performs smooth crossfade synthesis into the final vocal PCM track.
+     * Slices audio directly from DecodedAudioSource into 7.8-second (343,980 sample) segments,
+     * runs Demucs neural inference, and performs smooth crossfade synthesis into the final vocal PCM track.
+     * Prevents giant audio FloatArrays in memory.
      */
-    private suspend fun separateWithDemucs(
-        leftAudio: FloatArray,
-        rightAudio: FloatArray,
+    private suspend fun separateWithDemucsStream(
+        source: DecodedAudioSource,
         numFrames: Int,
         onProgress: (ExtractionProgress) -> Unit
     ): ShortArray {
@@ -205,8 +190,7 @@ class OfflineVocalSeparator(
             segRight.fill(0f)
 
             val available = min(segmentLen, numFrames - startFrame)
-            System.arraycopy(leftAudio, startFrame, segLeft, 0, available)
-            System.arraycopy(rightAudio, startFrame, segRight, 0, available)
+            source.readFramesToFloats(startFrame.toLong(), available, segLeft, segRight)
 
             val inputs = demucsTransformer.forwardToDemucsTensors(segLeft, segRight)
             val outputWav = onnxRunner.runDemucs(inputs.mixTensor, inputs.magTensor)
@@ -254,12 +238,11 @@ class OfflineVocalSeparator(
     }
 
     /**
-     * Executes Deezer Spleeter 2-stem ONNX neural vocal isolation in sequential segments.
+     * Executes Deezer Spleeter 2-stem ONNX neural vocal isolation in sequential segments directly from DecodedAudioSource.
      * Guaranteed zero out-of-memory and high throughput.
      */
-    private suspend fun separateWithSpleeter(
-        leftAudio: FloatArray,
-        rightAudio: FloatArray,
+    private suspend fun separateWithSpleeterStream(
+        source: DecodedAudioSource,
         numFrames: Int,
         onProgress: (ExtractionProgress) -> Unit
     ): ShortArray {
@@ -267,17 +250,24 @@ class OfflineVocalSeparator(
         val totalChunks = ((numFrames + chunkSamples - 1) / chunkSamples).coerceAtLeast(1)
         val resultShorts = ShortArray(numFrames * 2)
 
+        val chunkL = FloatArray(chunkSamples)
+        val chunkR = FloatArray(chunkSamples)
+
         var startFrame = 0
         var chunkIndex = 0
 
         while (startFrame < numFrames) {
             currentCoroutineContext().ensureActive()
             val chunkLen = min(chunkSamples, numFrames - startFrame)
-            val chunkL = leftAudio.copyOfRange(startFrame, startFrame + chunkLen)
-            val chunkR = rightAudio.copyOfRange(startFrame, startFrame + chunkLen)
+            chunkL.fill(0f)
+            chunkR.fill(0f)
+            source.readFramesToFloats(startFrame.toLong(), chunkLen, chunkL, chunkR)
+
+            val sliceL = chunkL.copyOf(chunkLen)
+            val sliceR = chunkR.copyOf(chunkLen)
 
             val (recL, recR) = try {
-                val stftData = spleeterTransformer.forwardToSpleeterTensor(chunkL, chunkR)
+                val stftData = spleeterTransformer.forwardToSpleeterTensor(sliceL, sliceR)
                 val vocalsOutput = onnxRunner.runSpleeterVocals(stftData.magTensor, stftData.numChunks)
 
                 if (vocalsOutput != null) {
@@ -291,11 +281,11 @@ class OfflineVocalSeparator(
                     )
                 } else {
                     Log.w(tag, "Spleeter ONNX returned null on chunk $chunkIndex, falling back to spectral isolation")
-                    separateStereoSpectral(chunkL, chunkR)
+                    separateStereoSpectral(sliceL, sliceR)
                 }
             } catch (e: Exception) {
                 Log.e(tag, "Error in Spleeter chunk $chunkIndex: ${e.message}", e)
-                separateStereoSpectral(chunkL, chunkR)
+                separateStereoSpectral(sliceL, sliceR)
             }
 
             for (i in 0 until chunkLen) {
@@ -314,18 +304,19 @@ class OfflineVocalSeparator(
     }
 
     /**
-     * High-precision harmonic STFT spectral vocal isolation.
+     * High-precision harmonic STFT spectral vocal isolation with streamed chunks.
      * Uses phantom-center mid/side phase coherence and vocal formant harmonic priors
      * to eliminate panned instruments, stereo synths, cymbals, bass, and drums.
      */
-    private suspend fun separateWithSpectral(
-        leftAudio: FloatArray,
-        rightAudio: FloatArray,
+    private suspend fun separateWithSpectralStream(
+        source: DecodedAudioSource,
         numFrames: Int,
         onProgress: (ExtractionProgress) -> Unit
     ): ShortArray {
         val resultShorts = ShortArray(numFrames * 2)
         val chunkSize = 65536
+        val chunkL = FloatArray(chunkSize)
+        val chunkR = FloatArray(chunkSize)
         var start = 0
         var chunkIdx = 0
         val totalChunks = ((numFrames + chunkSize - 1) / chunkSize).coerceAtLeast(1)
@@ -333,10 +324,11 @@ class OfflineVocalSeparator(
         while (start < numFrames) {
             currentCoroutineContext().ensureActive()
             val len = min(chunkSize, numFrames - start)
-            val chunkL = leftAudio.copyOfRange(start, start + len)
-            val chunkR = rightAudio.copyOfRange(start, start + len)
+            chunkL.fill(0f)
+            chunkR.fill(0f)
+            source.readFramesToFloats(start.toLong(), len, chunkL, chunkR)
 
-            val (recL, recR) = separateStereoSpectral(chunkL, chunkR)
+            val (recL, recR) = separateStereoSpectral(chunkL.copyOf(len), chunkR.copyOf(len))
 
             for (i in 0 until len) {
                 resultShorts[(start + i) * 2] = (recL[i].coerceIn(-1.0f, 1.0f) * 32767.0f).toInt().toShort()

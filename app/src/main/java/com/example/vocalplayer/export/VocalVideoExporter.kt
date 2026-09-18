@@ -13,6 +13,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.example.vocalplayer.cache.CachedPcmReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -55,6 +56,41 @@ class VocalVideoExporter(private val context: Context) {
         sampleRate: Int = 44100,
         channels: Int = 2,
         onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): ExportResult = exportMutedInstrumentsVideoInternal(
+        sourceUri = sourceUri,
+        cachedVocalPcm = cachedVocalPcm,
+        reader = null,
+        title = title,
+        sampleRate = sampleRate,
+        channels = channels,
+        onProgress = onProgress
+    )
+
+    suspend fun exportMutedInstrumentsVideo(
+        sourceUri: Uri,
+        reader: CachedPcmReader,
+        title: String,
+        sampleRate: Int = 44100,
+        channels: Int = 2,
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): ExportResult = exportMutedInstrumentsVideoInternal(
+        sourceUri = sourceUri,
+        cachedVocalPcm = null,
+        reader = reader,
+        title = title,
+        sampleRate = sampleRate,
+        channels = channels,
+        onProgress = onProgress
+    )
+
+    private suspend fun exportMutedInstrumentsVideoInternal(
+        sourceUri: Uri,
+        cachedVocalPcm: ShortArray?,
+        reader: CachedPcmReader?,
+        title: String,
+        sampleRate: Int = 44100,
+        channels: Int = 2,
+        onProgress: (Float, String) -> Unit = { _, _ -> }
     ): ExportResult = withContext(Dispatchers.IO) {
         val cleanTitle = title.ifBlank { "vocal_isolated" }
             .replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -84,7 +120,8 @@ class VocalVideoExporter(private val context: Context) {
             hasVideoTrack = false
         }
 
-        val totalAudioDurationUs = (cachedVocalPcm.size.toLong() * 1_000_000L) / (sampleRate * channels)
+        val totalPcmSamples = reader?.totalSamples ?: cachedVocalPcm?.size?.toLong() ?: 0L
+        val totalAudioDurationUs = (totalPcmSamples * 1_000_000L) / (sampleRate * channels)
         val durationMs = totalAudioDurationUs / 1000L
 
         if (hasVideoTrack && videoFormat != null) {
@@ -93,6 +130,7 @@ class VocalVideoExporter(private val context: Context) {
                 videoTrackIndex = videoTrackIndex,
                 videoFormat = videoFormat,
                 cachedVocalPcm = cachedVocalPcm,
+                reader = reader,
                 sampleRate = sampleRate,
                 channels = channels,
                 totalAudioDurationUs = totalAudioDurationUs,
@@ -103,6 +141,7 @@ class VocalVideoExporter(private val context: Context) {
             extractor.release()
             generateStudioVideoWithVocalAudio(
                 cachedVocalPcm = cachedVocalPcm,
+                reader = reader,
                 sampleRate = sampleRate,
                 channels = channels,
                 totalAudioDurationUs = totalAudioDurationUs,
@@ -149,7 +188,8 @@ class VocalVideoExporter(private val context: Context) {
         extractor: MediaExtractor,
         videoTrackIndex: Int,
         videoFormat: MediaFormat,
-        cachedVocalPcm: ShortArray,
+        cachedVocalPcm: ShortArray?,
+        reader: CachedPcmReader?,
         sampleRate: Int,
         channels: Int,
         totalAudioDurationUs: Long,
@@ -191,8 +231,9 @@ class VocalVideoExporter(private val context: Context) {
         val videoBuffer = ByteBuffer.allocateDirect(maxVideoBufSize)
         val videoBufferInfo = MediaCodec.BufferInfo()
 
-        var pcmSampleOffset = 0
-        val totalPcmSamples = cachedVocalPcm.size
+        var pcmSampleOffset = 0L
+        val totalPcmSamples = reader?.totalSamples ?: cachedVocalPcm?.size?.toLong() ?: 0L
+        val tempShortChunk = ShortArray(8192)
         var audioInputDone = false
         var audioEncoderDone = false
         var videoDone = false
@@ -218,16 +259,26 @@ class VocalVideoExporter(private val context: Context) {
                     if (inIndex >= 0) {
                         val inBuf = audioEncoder.getInputBuffer(inIndex)!!
                         inBuf.clear()
-                        val shortsToRead = minOf(inBuf.remaining() / 2, totalPcmSamples - pcmSampleOffset)
+                        val remainingSamples = (totalPcmSamples - pcmSampleOffset).coerceAtLeast(0L)
+                        val shortsToRead = minOf(inBuf.remaining() / 2, remainingSamples.toInt())
                         if (shortsToRead > 0) {
-                            for (i in 0 until shortsToRead) {
-                                inBuf.putShort(cachedVocalPcm[pcmSampleOffset + i])
+                            if (reader != null) {
+                                val bufferToUse = if (shortsToRead <= tempShortChunk.size) tempShortChunk else ShortArray(shortsToRead)
+                                val read = reader.readSlice(pcmSampleOffset, shortsToRead, bufferToUse)
+                                for (i in 0 until read) {
+                                    inBuf.putShort(bufferToUse[i])
+                                }
+                            } else if (cachedVocalPcm != null) {
+                                val off = pcmSampleOffset.toInt()
+                                for (i in 0 until shortsToRead) {
+                                    inBuf.putShort(cachedVocalPcm[off + i])
+                                }
                             }
-                            val ptsUs = (pcmSampleOffset.toLong() * 1_000_000L) / (sampleRate * channels)
+                            val ptsUs = (pcmSampleOffset * 1_000_000L) / (sampleRate * channels)
                             pcmSampleOffset += shortsToRead
                             audioEncoder.queueInputBuffer(inIndex, 0, shortsToRead * 2, ptsUs, 0)
                         } else {
-                            val ptsUs = (pcmSampleOffset.toLong() * 1_000_000L) / (sampleRate * channels)
+                            val ptsUs = (pcmSampleOffset * 1_000_000L) / (sampleRate * channels)
                             audioEncoder.queueInputBuffer(inIndex, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             audioInputDone = true
                         }
@@ -315,7 +366,8 @@ class VocalVideoExporter(private val context: Context) {
      * Fallback for audio-only media: generates a 16:9 H.264 video with an ambient studio backdrop.
      */
     private suspend fun generateStudioVideoWithVocalAudio(
-        cachedVocalPcm: ShortArray,
+        cachedVocalPcm: ShortArray?,
+        reader: CachedPcmReader?,
         sampleRate: Int,
         channels: Int,
         totalAudioDurationUs: Long,
@@ -371,8 +423,9 @@ class VocalVideoExporter(private val context: Context) {
             yuvFrame[i + 1] = 132.toByte() // V (purple tint)
         }
 
-        var pcmSampleOffset = 0
-        val totalPcmSamples = cachedVocalPcm.size
+        var pcmSampleOffset = 0L
+        val totalPcmSamples = reader?.totalSamples ?: cachedVocalPcm?.size?.toLong() ?: 0L
+        val tempShortChunk = ShortArray(8192)
         var audioInputDone = false
         var audioEncoderDone = false
         var videoFrameIndex = 0
@@ -388,16 +441,26 @@ class VocalVideoExporter(private val context: Context) {
                     if (inIdx >= 0) {
                         val inBuf = audioEncoder.getInputBuffer(inIdx)!!
                         inBuf.clear()
-                        val shortsToRead = minOf(inBuf.remaining() / 2, totalPcmSamples - pcmSampleOffset)
+                        val remainingSamples = (totalPcmSamples - pcmSampleOffset).coerceAtLeast(0L)
+                        val shortsToRead = minOf(inBuf.remaining() / 2, remainingSamples.toInt())
                         if (shortsToRead > 0) {
-                            for (i in 0 until shortsToRead) {
-                                inBuf.putShort(cachedVocalPcm[pcmSampleOffset + i])
+                            if (reader != null) {
+                                val bufferToUse = if (shortsToRead <= tempShortChunk.size) tempShortChunk else ShortArray(shortsToRead)
+                                val read = reader.readSlice(pcmSampleOffset, shortsToRead, bufferToUse)
+                                for (i in 0 until read) {
+                                    inBuf.putShort(bufferToUse[i])
+                                }
+                            } else if (cachedVocalPcm != null) {
+                                val off = pcmSampleOffset.toInt()
+                                for (i in 0 until shortsToRead) {
+                                    inBuf.putShort(cachedVocalPcm[off + i])
+                                }
                             }
-                            val pts = (pcmSampleOffset.toLong() * 1_000_000L) / (sampleRate * channels)
+                            val pts = (pcmSampleOffset * 1_000_000L) / (sampleRate * channels)
                             pcmSampleOffset += shortsToRead
                             audioEncoder.queueInputBuffer(inIdx, 0, shortsToRead * 2, pts, 0)
                         } else {
-                            val pts = (pcmSampleOffset.toLong() * 1_000_000L) / (sampleRate * channels)
+                            val pts = (pcmSampleOffset * 1_000_000L) / (sampleRate * channels)
                             audioEncoder.queueInputBuffer(inIdx, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             audioInputDone = true
                         }

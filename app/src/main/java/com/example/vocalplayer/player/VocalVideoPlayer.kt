@@ -370,8 +370,15 @@ class VocalVideoPlayer(private val context: Context) {
             return
         }
 
-        val pcmData = cacheManager.getCachedPcm(currentUri)
-        if (pcmData == null || pcmData.isEmpty()) {
+        val isCached = cacheManager.isVocalCached(currentUri)
+        if (!isCached) {
+            _uiState.update { it.copy(statusMessage = "Please isolate and cache vocals first before exporting") }
+            return
+        }
+
+        val reader = cacheManager.getCachedReader(currentUri)
+        val pcmData = if (reader == null) cacheManager.getCachedPcm(currentUri) else null
+        if (reader == null && (pcmData == null || pcmData.isEmpty())) {
             _uiState.update { it.copy(statusMessage = "Please isolate and cache vocals first before exporting") }
             return
         }
@@ -390,19 +397,35 @@ class VocalVideoPlayer(private val context: Context) {
 
         exportJob = scope.launch(Dispatchers.Default) {
             try {
-                val result = videoExporter.exportMutedInstrumentsVideo(
-                    sourceUri = currentUri,
-                    cachedVocalPcm = pcmData,
-                    title = _uiState.value.mediaTitle,
-                    onProgress = { prog, stage ->
-                        _uiState.update {
-                            it.copy(
-                                exportProgress = prog,
-                                exportStage = stage
-                            )
+                val result = if (reader != null) {
+                    videoExporter.exportMutedInstrumentsVideo(
+                        sourceUri = currentUri,
+                        reader = reader,
+                        title = _uiState.value.mediaTitle,
+                        onProgress = { prog, stage ->
+                            _uiState.update {
+                                it.copy(
+                                    exportProgress = prog,
+                                    exportStage = stage
+                                )
+                            }
                         }
-                    }
-                )
+                    )
+                } else {
+                    videoExporter.exportMutedInstrumentsVideo(
+                        sourceUri = currentUri,
+                        cachedVocalPcm = pcmData!!,
+                        title = _uiState.value.mediaTitle,
+                        onProgress = { prog, stage ->
+                            _uiState.update {
+                                it.copy(
+                                    exportProgress = prog,
+                                    exportStage = stage
+                                )
+                            }
+                        }
+                    )
+                }
 
                 _uiState.update {
                     it.copy(

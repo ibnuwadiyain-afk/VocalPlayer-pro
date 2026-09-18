@@ -8,6 +8,8 @@ import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -15,6 +17,7 @@ import java.nio.ByteOrder
  * High-speed offline audio decoder using Android's native MediaExtractor and MediaCodec.
  * Decodes video files (MP4, MKV, WebM) or audio files (MP3, WAV, AAC, M4A, FLAC) into
  * standard 16-bit PCM stereo audio samples for offline neural source separation.
+ * Supports streaming to disk for long videos to eliminate OutOfMemoryError crashes.
  */
 class MediaAudioDecoder(private val context: Context) {
     private val tag = "MediaAudioDecoder"
@@ -26,13 +29,21 @@ class MediaAudioDecoder(private val context: Context) {
         val durationMs: Long
     )
 
-    suspend fun decodeToPcm(
+    /**
+     * Memory-safe streaming decoder: for long files, streams decoded PCM frames
+     * directly into a temporary file on disk, avoiding keeping hundreds of megabytes
+     * in the JVM heap simultaneously.
+     */
+    suspend fun streamDecodedAudio(
         uri: Uri,
         onProgress: ((progress: Float) -> Unit)? = null
-    ): DecodedAudio = withContext(Dispatchers.IO) {
+    ): DecodedAudioSource = withContext(Dispatchers.IO) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         var pfd: android.os.ParcelFileDescriptor? = null
+
+        val tempPcmFile = File(context.cacheDir, "dec_stream_${System.currentTimeMillis()}_${(1000..9999).random()}.pcm")
+        var fos: FileOutputStream? = null
 
         try {
             if (uri.scheme == "content") {
@@ -67,9 +78,10 @@ class MediaAudioDecoder(private val context: Context) {
             codec.configure(format, null, null, 0)
             codec.start()
 
-            val pcmBufferList = mutableListOf<ShortArray>()
-            var totalShorts = 0
+            fos = FileOutputStream(tempPcmFile)
+            val channel = fos.channel
 
+            var totalShortsWritten = 0L
             val bufferInfo = MediaCodec.BufferInfo()
             var isEos = false
             val kTimeOutUs = 10000L
@@ -101,14 +113,8 @@ class MediaAudioDecoder(private val context: Context) {
                     if (outputBuffer != null && bufferInfo.size > 0) {
                         outputBuffer.position(bufferInfo.offset)
                         outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-
-                        val shortBuffer = outputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                        val shortsRead = shortBuffer.remaining()
-                        val chunk = ShortArray(shortsRead)
-                        shortBuffer.get(chunk)
-
-                        pcmBufferList.add(chunk)
-                        totalShorts += shortsRead
+                        channel.write(outputBuffer)
+                        totalShortsWritten += (bufferInfo.size / 2)
                     }
 
                     codec.releaseOutputBuffer(outIndex, false)
@@ -121,21 +127,23 @@ class MediaAudioDecoder(private val context: Context) {
                 }
             }
 
-            // Consolidate all decoded chunks into a single ShortArray
-            val fullPcm = ShortArray(totalShorts)
-            var offset = 0
-            for (chunk in pcmBufferList) {
-                System.arraycopy(chunk, 0, fullPcm, offset, chunk.size)
-                offset += chunk.size
-            }
+            channel.force(true)
+            fos.close()
+            fos = null
 
-            Log.i(tag, "Decoded $uri to PCM: ${fullPcm.size} shorts, $sampleRate Hz, $channelCount ch, $durationMs ms")
-            DecodedAudio(
-                pcmShorts = fullPcm,
+            Log.i(tag, "Stream-decoded $uri to disk: $totalShortsWritten shorts ($sampleRate Hz, $channelCount ch, $durationMs ms, ${tempPcmFile.length() / 1024} KB)")
+
+            DecodedAudioSource(
                 sampleRate = sampleRate,
                 channelCount = channelCount,
-                durationMs = durationMs
+                durationMs = durationMs,
+                totalSamples = totalShortsWritten,
+                tempPcmFile = tempPcmFile
             )
+        } catch (e: Throwable) {
+            fos?.close()
+            tempPcmFile.delete()
+            throw e
         } finally {
             try {
                 codec?.stop()
@@ -153,6 +161,33 @@ class MediaAudioDecoder(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(tag, "Error closing PFD: ${e.message}")
             }
+        }
+    }
+
+    suspend fun decodeToPcm(
+        uri: Uri,
+        onProgress: ((progress: Float) -> Unit)? = null
+    ): DecodedAudio = withContext(Dispatchers.IO) {
+        val streamSource = streamDecodedAudio(uri, onProgress)
+        val totalShorts = streamSource.totalSamples
+        val sampleRate = streamSource.sampleRate
+        val channelCount = streamSource.channelCount
+        val durationMs = streamSource.durationMs
+
+        try {
+            if (totalShorts > Int.MAX_VALUE / 2) {
+                throw OutOfMemoryError("Audio file too large for in-memory ShortArray ($totalShorts shorts)")
+            }
+            val pcm = ShortArray(totalShorts.toInt())
+            streamSource.readSamples(0, totalShorts.toInt(), pcm)
+            DecodedAudio(
+                pcmShorts = pcm,
+                sampleRate = sampleRate,
+                channelCount = channelCount,
+                durationMs = durationMs
+            )
+        } finally {
+            streamSource.close()
         }
     }
 
