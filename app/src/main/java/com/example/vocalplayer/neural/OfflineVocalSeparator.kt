@@ -12,10 +12,12 @@ import com.example.vocalplayer.dsp.SpleeterSpectrogramTransformer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -65,11 +67,11 @@ class OfflineVocalSeparator(
         }
 
         try {
-            onProgress(ExtractionProgress("Decoding audio track...", 0.05f))
+            onProgress(ExtractionProgress("Starting audio pipeline...", 0.05f))
 
-            // Step 1: Decode media to memory-efficient streaming PCM audio
-            val decodedSource = decoder.streamDecodedAudio(mediaUri) { decodeProg ->
-                onProgress(ExtractionProgress("Decoding audio (${(decodeProg * 100).toInt()}%)...", 0.05f + decodeProg * 0.10f))
+            // Step 1: Start pipelined streaming decode
+            val decodedSource = decoder.startPipelinedDecode(mediaUri, this) { decodeProg ->
+                // Background decode progress
             }
 
             try {
@@ -77,15 +79,15 @@ class OfflineVocalSeparator(
 
                 val sampleRate = decodedSource.sampleRate
                 val channelCount = decodedSource.channelCount
-                val totalShorts = decodedSource.totalSamples
+                val totalDurationMs = decodedSource.durationMs
 
-                if (totalShorts < 1000) {
-                    Log.w(tag, "Audio track too short to process")
+                // Wait for initial audio chunk (~1.5s or available) to confirm valid track
+                val initialWaitFrames = minOf(65536L, if (decodedSource.totalSamples > 0) decodedSource.totalSamples / channelCount.coerceAtLeast(1) else 65536L)
+                val availableInitFrames = decodedSource.waitForFrames(if (initialWaitFrames > 0) initialWaitFrames else 1000L)
+                if (availableInitFrames == 0L && decodedSource.isDecodingFinished) {
+                    Log.w(tag, "Audio track is empty or too short to process")
                     return@withContext false
                 }
-
-                val numFrames = (if (channelCount >= 2) totalShorts / 2 else totalShorts).toInt()
-                val totalDurationMs = (numFrames.toLong() * 1000L) / sampleRate.coerceAtLeast(1)
 
                 // Initialize disk streaming session so player can read immediately as chunks land
                 cacheManager.startStreamingSession(mediaUri)
@@ -124,33 +126,40 @@ class OfflineVocalSeparator(
                     }
                 } else false
 
+                val estimatedFrames = if (decodedSource.totalSamples > 0) {
+                    (decodedSource.totalSamples / channelCount.coerceAtLeast(1)).toInt()
+                } else {
+                    ((totalDurationMs * sampleRate) / 1000L).toInt().coerceAtLeast(availableInitFrames.toInt())
+                }
+
                 when {
                     demucsLoaded -> {
-                        Log.i(tag, "Running Demucs v4 streaming separation on $numFrames frames...")
-                        separateWithDemucsStream(mediaUri, decodedSource, numFrames, totalDurationMs, onProgress)
+                        Log.i(tag, "Running Demucs v4 pipelined streaming separation on estimated $estimatedFrames frames...")
+                        separateWithDemucsStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, onProgress)
                     }
                     spleeterLoaded -> {
-                        Log.i(tag, "Running Deezer Spleeter 2-stem streaming isolation on $numFrames frames...")
-                        separateWithSpleeterStream(mediaUri, decodedSource, numFrames, totalDurationMs, onProgress)
+                        Log.i(tag, "Running Deezer Spleeter 2-stem pipelined streaming isolation on estimated $estimatedFrames frames...")
+                        separateWithSpleeterStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, onProgress)
                     }
                     else -> {
-                        Log.i(tag, "Running high-precision harmonic STFT spectral streaming isolation on $numFrames frames...")
-                        separateWithSpectralStream(mediaUri, decodedSource, numFrames, totalDurationMs, onProgress)
+                        Log.i(tag, "Running high-precision harmonic STFT spectral pipelined streaming isolation on estimated $estimatedFrames frames...")
+                        separateWithSpectralStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, onProgress)
                     }
                 }
 
                 currentCoroutineContext().ensureActive()
                 cacheManager.finishStreamingSession(mediaUri)
 
+                val finalDurationMs = if (totalDurationMs > 0) totalDurationMs else (decodedSource.decodedFrames * 1000L / sampleRate.coerceAtLeast(1))
                 onProgress(
                     ExtractionProgress(
                         stage = "Vocal isolation complete!",
                         progress = 1.0f,
                         isCompleted = true,
                         isChunkReady = true,
-                        streamedFrames = numFrames.toLong(),
-                        streamedDurationMs = totalDurationMs,
-                        totalDurationMs = totalDurationMs
+                        streamedFrames = decodedSource.decodedFrames,
+                        streamedDurationMs = finalDurationMs,
+                        totalDurationMs = finalDurationMs
                     )
                 )
                 Log.i(tag, "Successfully processed and cached vocals for $mediaUri")
@@ -186,7 +195,7 @@ class OfflineVocalSeparator(
         val segmentLen = demucsTransformer.segmentSamples // 343,980
         val fadeLen = 44100 // 1-second overlap between consecutive segments
         val hopLen = segmentLen - fadeLen // 299,880
-        val totalSegments = ((numFrames - fadeLen).coerceAtLeast(0) / hopLen) + 1
+        val totalSegments = max(1, ((numFrames - fadeLen).coerceAtLeast(0) / hopLen) + 1)
 
         val segLeft = FloatArray(segmentLen)
         val segRight = FloatArray(segmentLen)
@@ -199,12 +208,25 @@ class OfflineVocalSeparator(
         var segIndex = 0
         var totalStreamedFrames = 0L
 
-        while (startFrame < numFrames) {
+        while (true) {
             currentCoroutineContext().ensureActive()
+
+            val targetFrames = (startFrame + segmentLen).toLong()
+            val availableDecodedFrames = source.waitForFrames(targetFrames)
+
+            if (startFrame >= availableDecodedFrames && source.isDecodingFinished) {
+                break
+            }
+
+            val available = min(segmentLen, (availableDecodedFrames - startFrame).toInt())
+            if (available <= 0) {
+                if (source.isDecodingFinished) break
+                delay(20)
+                continue
+            }
+
             segLeft.fill(0f)
             segRight.fill(0f)
-
-            val available = min(segmentLen, numFrames - startFrame)
             source.readFramesToFloats(startFrame.toLong(), available, segLeft, segRight)
 
             val inputs = demucsTransformer.forwardToDemucsTensors(segLeft, segRight)
@@ -229,7 +251,8 @@ class OfflineVocalSeparator(
                 }
             }
 
-            val isFinalSegment = (startFrame + hopLen >= numFrames) || (available <= hopLen)
+            val isDecoderDone = source.isDecodingFinished
+            val isFinalSegment = isDecoderDone && ((startFrame + hopLen >= availableDecodedFrames) || (available <= hopLen))
 
             if (!isFinalSegment) {
                 // Frames 0 until hopLen are completely finished
@@ -262,7 +285,7 @@ class OfflineVocalSeparator(
             }
 
             segIndex++
-            val prog = (0.20f + (segIndex.toFloat() / totalSegments.toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
+            val prog = (0.20f + (segIndex.toFloat() / max(1, totalSegments).toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
             val streamedMs = (totalStreamedFrames * 1000L) / 44100L
             onProgress(
                 ExtractionProgress(
@@ -292,7 +315,7 @@ class OfflineVocalSeparator(
         onProgress: (ExtractionProgress) -> Unit
     ) {
         val chunkSamples = 524288 // 512 frames * 1024 hop = ~11.88 seconds
-        val totalChunks = ((numFrames + chunkSamples - 1) / chunkSamples).coerceAtLeast(1)
+        val totalChunks = max(1, ((numFrames + chunkSamples - 1) / chunkSamples).coerceAtLeast(1))
 
         val chunkL = FloatArray(chunkSamples)
         val chunkR = FloatArray(chunkSamples)
@@ -301,10 +324,24 @@ class OfflineVocalSeparator(
         var chunkIndex = 0
         var totalStreamedFrames = 0L
 
-        while (startFrame < numFrames) {
+        while (true) {
             currentCoroutineContext().ensureActive()
-            val chunkLen = min(chunkSamples, numFrames - startFrame)
-            val isFinal = (startFrame + chunkLen >= numFrames)
+
+            val targetFrames = (startFrame + chunkSamples).toLong()
+            val availableDecodedFrames = source.waitForFrames(targetFrames)
+
+            if (startFrame >= availableDecodedFrames && source.isDecodingFinished) {
+                break
+            }
+
+            val chunkLen = min(chunkSamples, (availableDecodedFrames - startFrame).toInt())
+            if (chunkLen <= 0) {
+                if (source.isDecodingFinished) break
+                delay(20)
+                continue
+            }
+
+            val isFinal = source.isDecodingFinished && (startFrame + chunkLen >= availableDecodedFrames)
 
             chunkL.fill(0f)
             chunkR.fill(0f)
@@ -345,7 +382,7 @@ class OfflineVocalSeparator(
             totalStreamedFrames += chunkLen
 
             chunkIndex++
-            val prog = (0.20f + (chunkIndex.toFloat() / totalChunks.toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
+            val prog = (0.20f + (chunkIndex.toFloat() / max(1, totalChunks).toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
             val streamedMs = (totalStreamedFrames * 1000L) / 44100L
             onProgress(
                 ExtractionProgress(
@@ -358,7 +395,8 @@ class OfflineVocalSeparator(
                 )
             )
 
-            startFrame += chunkSamples
+            if (isFinal) break
+            startFrame += chunkLen
         }
     }
 
@@ -379,12 +417,26 @@ class OfflineVocalSeparator(
         var start = 0
         var chunkIdx = 0
         var totalStreamedFrames = 0L
-        val totalChunks = ((numFrames + chunkSize - 1) / chunkSize).coerceAtLeast(1)
+        val totalChunks = max(1, ((numFrames + chunkSize - 1) / chunkSize).coerceAtLeast(1))
 
-        while (start < numFrames) {
+        while (true) {
             currentCoroutineContext().ensureActive()
-            val len = min(chunkSize, numFrames - start)
-            val isFinal = (start + len >= numFrames)
+
+            val targetFrames = (start + chunkSize).toLong()
+            val availableDecodedFrames = source.waitForFrames(targetFrames)
+
+            if (start >= availableDecodedFrames && source.isDecodingFinished) {
+                break
+            }
+
+            val len = min(chunkSize, (availableDecodedFrames - start).toInt())
+            if (len <= 0) {
+                if (source.isDecodingFinished) break
+                delay(20)
+                continue
+            }
+
+            val isFinal = source.isDecodingFinished && (start + len >= availableDecodedFrames)
 
             chunkL.fill(0f)
             chunkR.fill(0f)
@@ -402,7 +454,7 @@ class OfflineVocalSeparator(
             totalStreamedFrames += len
 
             chunkIdx++
-            val prog = (0.20f + (chunkIdx.toFloat() / totalChunks.toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
+            val prog = (0.20f + (chunkIdx.toFloat() / max(1, totalChunks).toFloat()) * 0.74f).coerceIn(0.20f, 0.94f)
             val streamedMs = (totalStreamedFrames * 1000L) / 44100L
             onProgress(
                 ExtractionProgress(
@@ -415,6 +467,7 @@ class OfflineVocalSeparator(
                 )
             )
 
+            if (isFinal) break
             start += len
         }
     }

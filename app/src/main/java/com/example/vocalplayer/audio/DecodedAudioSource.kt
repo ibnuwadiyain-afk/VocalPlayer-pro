@@ -1,5 +1,9 @@
 package com.example.vocalplayer.audio
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -7,9 +11,9 @@ import java.nio.ByteOrder
 
 /**
  * Memory-efficient container for decoded audio.
- * For audio shorter than threshold, keeps in memory.
- * For long audio files, streams to a temporary disk-backed PCM file
- * to prevent OutOfMemoryError crashes on mobile devices.
+ * Supports both static pre-decoded audio and real-time pipelined streaming,
+ * where neural source separation runs concurrently as MediaCodec decodes
+ * chunks to disk.
  */
 class DecodedAudioSource(
     val sampleRate: Int,
@@ -17,15 +21,83 @@ class DecodedAudioSource(
     val durationMs: Long,
     val totalSamples: Long,
     val tempPcmFile: File? = null,
-    val memoryPcm: ShortArray? = null
+    val memoryPcm: ShortArray? = null,
+    val isPipelined: Boolean = false
 ) : AutoCloseable {
 
     private var raf: RandomAccessFile? = null
     private val bufferLock = Any()
 
+    @Volatile
+    var decodedSamples: Long = if (isPipelined) 0L else totalSamples
+        private set
+
+    val decodedFrames: Long
+        get() = decodedSamples / channelCount.coerceAtLeast(1)
+
+    @Volatile
+    var isDecodingFinished: Boolean = !isPipelined
+        private set
+
+    @Volatile
+    var decodingError: Throwable? = null
+        private set
+
+    var decodingJob: Job? = null
+
     init {
-        if (tempPcmFile != null && tempPcmFile.exists()) {
-            raf = RandomAccessFile(tempPcmFile, "r")
+        synchronized(bufferLock) {
+            ensureOpenLocked()
+        }
+    }
+
+    private fun ensureOpenLocked(): RandomAccessFile? {
+        if (raf == null && tempPcmFile != null && tempPcmFile.exists()) {
+            try {
+                raf = RandomAccessFile(tempPcmFile, "r")
+            } catch (_: Exception) {}
+        }
+        return raf
+    }
+
+    /**
+     * Called by the background MediaCodec worker when new samples are written to [tempPcmFile].
+     */
+    fun notifyDecodedSamples(newTotalSamples: Long) {
+        decodedSamples = newTotalSamples
+    }
+
+    /**
+     * Called by the background MediaCodec worker when EOS is reached.
+     */
+    fun notifyDecodingFinished(finalTotalSamples: Long) {
+        decodedSamples = finalTotalSamples
+        isDecodingFinished = true
+    }
+
+    /**
+     * Called if an unrecoverable decoding error occurs.
+     */
+    fun notifyDecodingError(throwable: Throwable) {
+        decodingError = throwable
+        isDecodingFinished = true
+    }
+
+    /**
+     * Suspends until at least [targetFrames] have been decoded to disk,
+     * or until decoding has completely finished.
+     * Returns the current count of available decoded frames.
+     */
+    suspend fun waitForFrames(targetFrames: Long): Long {
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            decodingError?.let { throw it }
+
+            val currentFrames = decodedFrames
+            if (currentFrames >= targetFrames || isDecodingFinished) {
+                return currentFrames
+            }
+            delay(15)
         }
     }
 
@@ -34,8 +106,10 @@ class DecodedAudioSource(
      * Returns the actual count of samples read.
      */
     fun readSamples(startSampleIndex: Long, count: Int, outBuffer: ShortArray): Int {
-        if (startSampleIndex >= totalSamples || count <= 0) return 0
-        val actualCount = minOf(count.toLong(), totalSamples - startSampleIndex).toInt()
+        val availableLimit = if (isPipelined) decodedSamples else totalSamples
+        if (startSampleIndex >= availableLimit || count <= 0) return 0
+        val actualCount = minOf(count.toLong(), availableLimit - startSampleIndex).toInt()
+        if (actualCount <= 0) return 0
 
         val mem = memoryPcm
         if (mem != null) {
@@ -43,8 +117,8 @@ class DecodedAudioSource(
             return actualCount
         }
 
-        val fileRaf = raf ?: return 0
         synchronized(bufferLock) {
+            val fileRaf = ensureOpenLocked() ?: return 0
             try {
                 fileRaf.seek(startSampleIndex * 2L)
                 val bytesToRead = actualCount * 2
@@ -93,6 +167,9 @@ class DecodedAudioSource(
     }
 
     override fun close() {
+        try {
+            decodingJob?.cancel()
+        } catch (_: Exception) {}
         synchronized(bufferLock) {
             try {
                 raf?.close()
@@ -104,3 +181,4 @@ class DecodedAudioSource(
         }
     }
 }
+

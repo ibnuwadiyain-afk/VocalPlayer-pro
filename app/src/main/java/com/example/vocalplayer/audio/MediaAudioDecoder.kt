@@ -6,7 +6,11 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import android.util.Log
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -28,6 +32,148 @@ class MediaAudioDecoder(private val context: Context) {
         val channelCount: Int,
         val durationMs: Long
     )
+
+    /**
+     * Starts pipelined streaming decoding:
+     * Reads track metadata instantly (<5ms) and immediately returns a [DecodedAudioSource],
+     * while MediaCodec decodes audio frames into the backing file in a background coroutine.
+     * Neural vocal isolation can consume the first chunk immediately as soon as its frames land,
+     * without waiting for the entire media file to decode.
+     */
+    suspend fun startPipelinedDecode(
+        uri: Uri,
+        scope: CoroutineScope,
+        onProgress: ((progress: Float) -> Unit)? = null
+    ): DecodedAudioSource = withContext(Dispatchers.IO) {
+        val extractor = MediaExtractor()
+        var pfd: android.os.ParcelFileDescriptor? = null
+
+        try {
+            if (uri.scheme == "content") {
+                try {
+                    pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                    if (pfd != null) {
+                        extractor.setDataSource(pfd.fileDescriptor)
+                    } else {
+                        extractor.setDataSource(context, uri, null)
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to open content FD, falling back to context URI: ${e.message}")
+                    extractor.setDataSource(context, uri, null)
+                }
+            } else {
+                extractor.setDataSource(context, uri, null)
+            }
+
+            val audioTrackIndex = findAudioTrack(extractor)
+            if (audioTrackIndex < 0) {
+                throw IllegalStateException("No audio track found in media file: $uri")
+            }
+
+            extractor.selectTrack(audioTrackIndex)
+            val format = extractor.getTrackFormat(audioTrackIndex)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: "audio/mp4a-latm"
+            val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            val channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
+            val durationMs = durationUs / 1000L
+            val estimatedFrames = if (durationUs > 0) (durationUs * sampleRate / 1_000_000L) else 0L
+            val estimatedSamples = estimatedFrames * channelCount
+
+            val tempPcmFile = File(context.cacheDir, "dec_pipe_${System.currentTimeMillis()}_${(1000..9999).random()}.pcm")
+            tempPcmFile.createNewFile()
+
+            val source = DecodedAudioSource(
+                sampleRate = sampleRate,
+                channelCount = channelCount,
+                durationMs = durationMs,
+                totalSamples = estimatedSamples,
+                tempPcmFile = tempPcmFile,
+                isPipelined = true
+            )
+
+            val decodeJob = scope.launch(Dispatchers.IO) {
+                var codec: MediaCodec? = null
+                var fos: FileOutputStream? = null
+                try {
+                    codec = MediaCodec.createDecoderByType(mime)
+                    codec.configure(format, null, null, 0)
+                    codec.start()
+
+                    fos = FileOutputStream(tempPcmFile, true)
+                    val channel = fos.channel
+                    var totalShortsWritten = 0L
+                    val bufferInfo = MediaCodec.BufferInfo()
+                    var isEos = false
+                    val kTimeOutUs = 10000L
+
+                    while (!isEos && isActive) {
+                        val inIndex = codec.dequeueInputBuffer(kTimeOutUs)
+                        if (inIndex >= 0) {
+                            val inputBuffer = codec.getInputBuffer(inIndex)
+                            if (inputBuffer != null) {
+                                val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                                if (sampleSize < 0) {
+                                    codec.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                } else {
+                                    val sampleTimeUs = extractor.sampleTime
+                                    codec.queueInputBuffer(inIndex, 0, sampleSize, sampleTimeUs, 0)
+                                    extractor.advance()
+
+                                    if (durationUs > 0) {
+                                        val progress = (sampleTimeUs.toFloat() / durationUs.toFloat()).coerceIn(0f, 1f)
+                                        onProgress?.invoke(progress)
+                                    }
+                                }
+                            }
+                        }
+
+                        var outIndex = codec.dequeueOutputBuffer(bufferInfo, kTimeOutUs)
+                        while (outIndex >= 0) {
+                            val outputBuffer = codec.getOutputBuffer(outIndex)
+                            if (outputBuffer != null && bufferInfo.size > 0) {
+                                outputBuffer.position(bufferInfo.offset)
+                                outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                                channel.write(outputBuffer)
+                                totalShortsWritten += (bufferInfo.size / 2)
+                                source.notifyDecodedSamples(totalShortsWritten)
+                            }
+
+                            codec.releaseOutputBuffer(outIndex, false)
+
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                isEos = true
+                                break
+                            }
+                            outIndex = codec.dequeueOutputBuffer(bufferInfo, 0L)
+                        }
+                    }
+
+                    channel.force(true)
+                    source.notifyDecodingFinished(totalShortsWritten)
+                    Log.i(tag, "Pipelined background decode finished: $totalShortsWritten shorts ($durationMs ms)")
+                } catch (e: Throwable) {
+                    if (e !is CancellationException) {
+                        Log.e(tag, "Error in pipelined background decode: ${e.message}", e)
+                        source.notifyDecodingError(e)
+                    }
+                    throw e
+                } finally {
+                    try { fos?.close() } catch (_: Exception) {}
+                    try { codec?.stop(); codec?.release() } catch (_: Exception) {}
+                    try { extractor.release() } catch (_: Exception) {}
+                    try { pfd?.close() } catch (_: Exception) {}
+                }
+            }
+
+            source.decodingJob = decodeJob
+            source
+        } catch (e: Throwable) {
+            try { extractor.release() } catch (_: Exception) {}
+            try { pfd?.close() } catch (_: Exception) {}
+            throw e
+        }
+    }
 
     /**
      * Memory-safe streaming decoder: for long files, streams decoded PCM frames
