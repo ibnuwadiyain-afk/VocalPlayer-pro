@@ -321,6 +321,8 @@ fun VocalPlayerScreen(
                 OfflineExtractionCard(
                     isExtracting = uiState.isExtractingVocals,
                     isCached = uiState.isVocalCached,
+                    isStreaming = uiState.isStreamingVocal,
+                    streamedDurationMs = uiState.streamedDurationMs,
                     extractionStage = uiState.extractionStage,
                     extractionProgress = uiState.extractionProgress,
                     cacheSizeMb = uiState.cacheSizeMb,

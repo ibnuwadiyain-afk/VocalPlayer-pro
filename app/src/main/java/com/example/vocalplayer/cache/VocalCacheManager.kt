@@ -6,6 +6,7 @@ import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -24,10 +25,66 @@ class VocalCacheManager(private val context: Context) {
     // Fast in-memory cache for short media; bounded to 15MB to prevent OOM
     private val activeMemoryCache = ConcurrentHashMap<String, ShortArray>()
     private val activeReaders = ConcurrentHashMap<String, CachedPcmReader>()
+    private val activeStreamingSessions = ConcurrentHashMap<String, StreamingVocalSession>()
     private var activeMediaKey: String? = null
 
     // Threshold for storing in memory: ~3 minutes stereo at 44.1kHz (~30MB)
     private val maxMemoryShorts = 44100 * 2 * 180
+
+    class StreamingVocalSession(
+        val file: File,
+        val key: String
+    ) : AutoCloseable {
+        private val raf = RandomAccessFile(file, "rw")
+        private val channel = raf.channel
+        private val lock = Any()
+        val samplesWritten = java.util.concurrent.atomic.AtomicLong(0L)
+        @Volatile var isClosed = false
+
+        init {
+            // Truncate to start fresh
+            raf.setLength(0L)
+        }
+
+        fun append(chunk: ShortArray, offset: Int, count: Int, isFinal: Boolean) {
+            if (isClosed || count <= 0) return
+            synchronized(lock) {
+                if (isClosed) return
+                try {
+                    val chunkSize = 32768
+                    val byteBuffer = ByteBuffer.allocateDirect(minOf(count, chunkSize) * 2).order(ByteOrder.LITTLE_ENDIAN)
+                    val shortBuffer = byteBuffer.asShortBuffer()
+                    var written = 0
+
+                    while (written < count) {
+                        val toWrite = minOf(chunkSize, count - written)
+                        byteBuffer.clear()
+                        shortBuffer.clear()
+                        shortBuffer.put(chunk, offset + written, toWrite)
+                        byteBuffer.position(0).limit(toWrite * 2)
+                        channel.write(byteBuffer)
+                        written += toWrite
+                    }
+                    channel.force(false)
+                    samplesWritten.addAndGet(count.toLong())
+                } catch (e: Exception) {
+                    Log.e("VocalCacheManager", "Error appending chunk to stream: ${e.message}", e)
+                }
+            }
+        }
+
+        override fun close() {
+            synchronized(lock) {
+                if (!isClosed) {
+                    isClosed = true
+                    try {
+                        channel.force(true)
+                        raf.close()
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
 
     fun getCacheKey(uri: Uri): String {
         val uriStr = uri.toString()
@@ -44,8 +101,66 @@ class VocalCacheManager(private val context: Context) {
     fun isVocalCached(uri: Uri): Boolean {
         val key = getCacheKey(uri)
         if (activeMemoryCache.containsKey(key)) return true
+        val session = activeStreamingSessions[key]
+        if (session != null && session.samplesWritten.get() > 22050L) return true
         val pcmFile = File(cacheDir, "${key}_vocals.pcm")
         return pcmFile.exists() && pcmFile.length() > 1024
+    }
+
+    fun isVocalStreaming(uri: Uri): Boolean {
+        val key = getCacheKey(uri)
+        return activeStreamingSessions.containsKey(key)
+    }
+
+    fun getAvailableVocalSamples(uri: Uri): Long {
+        val key = getCacheKey(uri)
+        val session = activeStreamingSessions[key]
+        if (session != null) return session.samplesWritten.get()
+        val pcm = activeMemoryCache[key]
+        if (pcm != null) return pcm.size.toLong()
+        val pcmFile = File(cacheDir, "${key}_vocals.pcm")
+        return if (pcmFile.exists()) pcmFile.length() / 2L else 0L
+    }
+
+    fun startStreamingSession(uri: Uri): StreamingVocalSession {
+        val key = getCacheKey(uri)
+        activeStreamingSessions.remove(key)?.close()
+        activeReaders.remove(key)?.close()
+        activeMemoryCache.remove(key)
+
+        val pcmFile = File(cacheDir, "${key}_vocals.pcm")
+        val session = StreamingVocalSession(pcmFile, key)
+        activeStreamingSessions[key] = session
+        activeMediaKey = key
+        return session
+    }
+
+    fun appendVocalChunk(
+        uri: Uri,
+        chunk: ShortArray,
+        offset: Int = 0,
+        count: Int = chunk.size,
+        isFinal: Boolean = false
+    ) {
+        val key = getCacheKey(uri)
+        val session = activeStreamingSessions[key] ?: return
+        session.append(chunk, offset, count, isFinal)
+        if (isFinal) {
+            finishStreamingSession(uri)
+        }
+    }
+
+    fun finishStreamingSession(uri: Uri) {
+        val key = getCacheKey(uri)
+        val session = activeStreamingSessions.remove(key)
+        session?.close()
+        Log.i(tag, "Finished vocal streaming session for $key (${session?.samplesWritten?.get() ?: 0} samples)")
+    }
+
+    fun cancelStreamingSession(uri: Uri) {
+        val key = getCacheKey(uri)
+        val session = activeStreamingSessions.remove(key)
+        session?.close()
     }
 
     fun getCachedPcmFile(uri: Uri): File? {
@@ -149,6 +264,16 @@ class VocalCacheManager(private val context: Context) {
     fun readVocalSlice(uri: Uri, startSampleIndex: Long, sampleCount: Int, outBuffer: ShortArray): Int {
         val key = getCacheKey(uri)
 
+        // If actively streaming isolated chunks, read up to currently flushed samples
+        val session = activeStreamingSessions[key]
+        if (session != null) {
+            val available = session.samplesWritten.get()
+            if (startSampleIndex >= available) return 0
+            val reader = getCachedReader(uri) ?: return 0
+            val limit = minOf(sampleCount.toLong(), available - startSampleIndex).toInt()
+            return reader.readSlice(startSampleIndex, limit, outBuffer, available)
+        }
+
         // 1. Check in-memory cache
         val pcm = activeMemoryCache[key]
         if (pcm != null) {
@@ -170,12 +295,14 @@ class VocalCacheManager(private val context: Context) {
     fun setActiveMedia(uri: Uri) {
         val key = getCacheKey(uri)
         activeMediaKey = key
-        if (!activeMemoryCache.containsKey(key)) {
+        if (!activeMemoryCache.containsKey(key) && !activeStreamingSessions.containsKey(key)) {
             getCachedPcm(uri)
         }
     }
 
     fun clearCache(): Long {
+        activeStreamingSessions.values.forEach { it.close() }
+        activeStreamingSessions.clear()
         activeMemoryCache.clear()
         activeReaders.values.forEach { it.close() }
         activeReaders.clear()

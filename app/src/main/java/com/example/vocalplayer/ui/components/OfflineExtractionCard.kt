@@ -63,6 +63,8 @@ fun OfflineExtractionCard(
     extractionProgress: Float,
     cacheSizeMb: Float,
     hasMediaLoaded: Boolean,
+    isStreaming: Boolean = false,
+    streamedDurationMs: Long = 0L,
     onStartExtraction: () -> Unit,
     onCancelExtraction: () -> Unit,
     onClearCache: () -> Unit,
@@ -71,6 +73,12 @@ fun OfflineExtractionCard(
 ) {
     if (!hasMediaLoaded && !isExtracting) return
 
+    val borderColor = when {
+        isCached -> VocalGreen.copy(alpha = 0.5f)
+        isStreaming -> VocalCyan.copy(alpha = 0.6f)
+        else -> StudioCardBorder
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -78,7 +86,7 @@ fun OfflineExtractionCard(
             .background(StudioSurface)
             .border(
                 1.dp,
-                if (isCached) VocalGreen.copy(alpha = 0.5f) else StudioCardBorder,
+                borderColor,
                 RoundedCornerShape(14.dp)
             )
             .padding(12.dp)
@@ -87,7 +95,7 @@ fun OfflineExtractionCard(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when {
-                // CASE 1: Actively Extracting with Demucs
+                // CASE 1: Actively Extracting with Streaming Playback Support
                 isExtracting -> {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -102,13 +110,13 @@ fun OfflineExtractionCard(
                                 modifier = Modifier
                                     .size(32.dp)
                                     .clip(CircleShape)
-                                    .background(VocalCyan.copy(alpha = 0.2f)),
+                                    .background(if (isStreaming) VocalGreen.copy(alpha = 0.2f) else VocalCyan.copy(alpha = 0.2f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.GraphicEq,
                                     contentDescription = "Extracting",
-                                    tint = VocalCyan,
+                                    tint = if (isStreaming) VocalGreen else VocalCyan,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -117,14 +125,18 @@ fun OfflineExtractionCard(
 
                             Column {
                                 Text(
-                                    text = "Demucs Offline Isolation",
+                                    text = if (isStreaming) "Playing Separated Chunks Live" else "Neural Vocal Isolation",
                                     color = TextPrimary,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = extractionStage ?: "Processing audio track...",
-                                    color = VocalCyan,
+                                    text = if (isStreaming) {
+                                        "${extractionStage ?: "Processing"} • ${streamedDurationMs / 1000}s ready"
+                                    } else {
+                                        extractionStage ?: "Processing audio track..."
+                                    },
+                                    color = if (isStreaming) VocalGreen else VocalCyan,
                                     fontSize = 11.sp,
                                     maxLines = 1
                                 )
@@ -144,13 +156,30 @@ fun OfflineExtractionCard(
                         }
                     }
 
+                    if (isStreaming) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(VocalGreen.copy(alpha = 0.12f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "⚡ Isolated vocal playback active • Smoothly streaming while remaining chunks process",
+                                color = VocalGreen,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
                     LinearProgressIndicator(
                         progress = { extractionProgress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
                             .clip(RoundedCornerShape(3.dp)),
-                        color = VocalCyan,
+                        color = if (isStreaming) VocalGreen else VocalCyan,
                         trackColor = StudioSurfaceVariant
                     )
 
@@ -159,13 +188,13 @@ fun OfflineExtractionCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Extracting vocals once for lag-free playback",
+                            text = if (isStreaming) "Audio plays continuously without waiting" else "Separating vocals into streaming chunks",
                             color = TextSecondary,
                             fontSize = 10.sp
                         )
                         Text(
                             text = "${(extractionProgress * 100).toInt()}%",
-                            color = VocalCyan,
+                            color = if (isStreaming) VocalGreen else VocalCyan,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )

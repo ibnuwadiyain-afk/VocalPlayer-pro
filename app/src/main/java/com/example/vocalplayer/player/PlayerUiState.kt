@@ -29,6 +29,9 @@ data class PlayerUiState(
     // Offline Demucs Vocal Extraction & Caching state
     val isVocalCached: Boolean = false,
     val isExtractingVocals: Boolean = false,
+    val isStreamingVocal: Boolean = false,
+    val streamedDurationMs: Long = 0L,
+    val totalExtractionDurationMs: Long = 0L,
     val extractionStage: String? = null,
     val extractionProgress: Float = 0.0f,
     val cacheSizeMb: Float = 0.0f,

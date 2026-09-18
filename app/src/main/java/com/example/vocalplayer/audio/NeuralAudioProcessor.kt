@@ -103,17 +103,28 @@ class NeuralAudioProcessor(
             val inv32768 = 1.0f / 32768.0f
 
             if (isCached && uri != null && cacheManager != null) {
-                // ZERO-LAG CACHED PLAYBACK: Read pre-extracted Demucs vocal stem directly
+                // ZERO-LAG CACHED PLAYBACK: Read pre-extracted vocal stem directly (supports active streaming)
                 val readCount = cacheManager.readVocalSlice(uri, playbackSampleIndex, availableShorts, cachedVocalShorts)
                 val stepAlpha = (targetMixAlpha - currentMixAlpha) / availableShorts.toFloat().coerceAtLeast(1f)
 
                 var vocalEnergySum = 0f
                 var instEnergySum = 0f
 
+                val isPartialChunk = readCount in 1 until availableShorts
+                val crossfadeLen = if (isPartialChunk) minOf(128, readCount) else 0
+
                 for (i in 0 until availableShorts) {
                     currentMixAlpha = min(1.0f, max(0.0f, currentMixAlpha + stepAlpha))
                     val orig = shorts[i] * inv32768
-                    val vocal = if (i < readCount) cachedVocalShorts[i] * inv32768 else orig
+                    val vocal = when {
+                        i < readCount - crossfadeLen -> cachedVocalShorts[i] * inv32768
+                        i < readCount -> {
+                            val v = cachedVocalShorts[i] * inv32768
+                            val fade = (i - (readCount - crossfadeLen)).toFloat() / crossfadeLen.toFloat()
+                            (1.0f - fade) * v + fade * orig
+                        }
+                        else -> orig
+                    }
                     val blended = (1.0f - currentMixAlpha) * orig + currentMixAlpha * vocal
                     blendedOutput[i] = blended
 

@@ -210,6 +210,53 @@ class ExampleUnitTest {
     assertEquals(50, resampled.size)
     assertEquals(1.0f, resampled[0], 1e-3f)
   }
+
+  @Test
+  fun testCachedPcmReaderDynamicStreamingGrowth() {
+    val tempFile = java.io.File.createTempFile("streaming_test", ".pcm")
+    try {
+      val reader = com.example.vocalplayer.cache.CachedPcmReader(tempFile)
+      assertEquals(0L, reader.totalSamples)
+
+      // 1. Simulate chunk 1 written by background separator
+      val chunk1 = ShortArray(1000) { i -> (i * 10).toShort() }
+      java.io.FileOutputStream(tempFile, true).use { fos ->
+        val bb = java.nio.ByteBuffer.allocate(chunk1.size * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        for (s in chunk1) bb.putShort(s)
+        fos.write(bb.array())
+        fos.flush()
+      }
+
+      // Verify dynamic growth recognition
+      val readBuffer1 = ShortArray(500)
+      val count1 = reader.readSlice(0L, 500, readBuffer1)
+      assertEquals(500, count1)
+      for (i in 0 until 500) {
+        assertEquals((i * 10).toShort(), readBuffer1[i])
+      }
+
+      // 2. Simulate chunk 2 written while player is reading
+      val chunk2 = ShortArray(1000) { i -> ((1000 + i) * 10).toShort() }
+      java.io.FileOutputStream(tempFile, true).use { fos ->
+        val bb = java.nio.ByteBuffer.allocate(chunk2.size * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        for (s in chunk2) bb.putShort(s)
+        fos.write(bb.array())
+        fos.flush()
+      }
+
+      // Read boundary between chunk 1 and chunk 2
+      val readBuffer2 = ShortArray(1000)
+      val count2 = reader.readSlice(500L, 1000, readBuffer2)
+      assertEquals(1000, count2)
+      for (i in 0 until 1000) {
+        assertEquals(((500 + i) * 10).toShort(), readBuffer2[i])
+      }
+
+      reader.close()
+    } finally {
+      tempFile.delete()
+    }
+  }
 }
 
 
