@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.example.vocalplayer.audio.NeuralAudioProcessor
+import com.example.vocalplayer.export.PipelinedVideoMuxer
 import com.example.vocalplayer.neural.ModelManager
 import com.example.vocalplayer.neural.NeuralModelProfile
 import com.example.vocalplayer.neural.NeuralSeparationEngine
@@ -58,6 +59,8 @@ class VocalVideoPlayer(private val context: Context) {
     private var extractionJob: Job? = null
     private var extractionTickerJob: Job? = null
     private var exportJob: Job? = null
+    private var pipelinedMuxer: PipelinedVideoMuxer? = null
+    private var pipelinedOutputFile: java.io.File? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     @Volatile private var latestPlaybackPositionMs: Long = 0L
 
@@ -329,14 +332,36 @@ class VocalVideoPlayer(private val context: Context) {
                     isStreamingVocal = false,
                     extractionElapsedSec = 0L,
                     extractionStage = "Starting offline vocal isolation...",
-                    extractionProgress = 0.0f
+                    extractionProgress = 0.0f,
+                    isPipelinedExportReady = false
                 )
             }
 
             var firstChunkActivated = false
 
+            // Spin up simultaneous pipelined video muxer so that when separation finishes,
+            // the video cache is ready for export immediately without waiting time!
             try {
-                val success = offlineVocalSeparator.extractAndCacheVocals(uri) { prog ->
+                pipelinedMuxer?.close()
+                val outFile = videoExporter.createExportOutputFile(_uiState.value.mediaTitle)
+                val muxer = PipelinedVideoMuxer(
+                    context = context,
+                    sourceUri = uri,
+                    outputFile = outFile,
+                    sampleRate = 44100,
+                    channels = 2
+                )
+                pipelinedMuxer = muxer
+                pipelinedOutputFile = outFile
+                muxer.start(scope)
+            } catch (e: Exception) {
+                Log.w(tag, "Could not initialize pipelined concurrent video muxer: ${e.message}")
+                pipelinedMuxer = null
+                pipelinedOutputFile = null
+            }
+
+            try {
+                val success = offlineVocalSeparator.extractAndCacheVocals(uri, pipelinedMuxer) { prog ->
                     _uiState.update {
                         it.copy(
                             extractionStage = prog.stage,
@@ -403,6 +428,10 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun cancelVocalExtraction() {
+        pipelinedMuxer?.close()
+        pipelinedMuxer = null
+        pipelinedOutputFile?.delete()
+        pipelinedOutputFile = null
         extractionJob?.cancel()
         extractionJob = null
         extractionTickerJob?.cancel()
@@ -422,6 +451,10 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun clearVocalCache() {
+        pipelinedMuxer?.close()
+        pipelinedMuxer = null
+        pipelinedOutputFile?.delete()
+        pipelinedOutputFile = null
         val freed = cacheManager.clearCache()
         val currentUri = _uiState.value.mediaUri
         _uiState.update {
@@ -433,10 +466,71 @@ class VocalVideoPlayer(private val context: Context) {
         }
     }
 
-    fun exportMutedInstrumentsVideo() {
+    fun setDeleteOriginalAfterExport(delete: Boolean) {
+        _uiState.update { it.copy(deleteOriginalAfterExport = delete) }
+    }
+
+    fun exportMutedInstrumentsVideo(userDeleteOriginal: Boolean? = null) {
         val currentUri = _uiState.value.mediaUri
         if (currentUri == null) {
             _uiState.update { it.copy(statusMessage = "Please load a video or audio file first") }
+            return
+        }
+
+        val deleteOriginal = userDeleteOriginal ?: _uiState.value.deleteOriginalAfterExport
+
+        // Check if pipelined simultaneous export was already running and ready!
+        val activeMuxer = pipelinedMuxer
+        val activeOutputFile = pipelinedOutputFile
+        if (activeMuxer != null && activeOutputFile != null && activeOutputFile.exists()) {
+            exportJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    isExportingVideo = true,
+                    exportProgress = 0.90f,
+                    exportStage = "Simultaneous video cache ready! Finalizing video...",
+                    exportResult = null,
+                    exportErrorMessage = null,
+                    showExportDialog = true
+                )
+            }
+
+            exportJob = scope.launch(Dispatchers.Default) {
+                try {
+                    activeMuxer.finishInput()
+                    val completed = activeMuxer.awaitCompletion()
+                    if (completed) {
+                        val durationMs = if (activeMuxer.totalDurationUs > 0) activeMuxer.totalDurationUs / 1000L else _uiState.value.durationMs
+                        val result = videoExporter.finalizePipelinedVideoExport(
+                            sourceUri = currentUri,
+                            outputFile = activeOutputFile,
+                            title = _uiState.value.mediaTitle,
+                            durationMs = durationMs,
+                            deleteOriginal = deleteOriginal,
+                            onProgress = { prog, stage ->
+                                _uiState.update { it.copy(exportProgress = prog, exportStage = stage) }
+                            }
+                        )
+
+                        _uiState.update {
+                            it.copy(
+                                isExportingVideo = false,
+                                exportProgress = 1.0f,
+                                exportStage = "Export Complete",
+                                exportResult = result,
+                                isPipelinedExportReady = true,
+                                statusMessage = if (result.originalDeleted) "Video exported! (Original video deleted)" else "Video exported instantly from cache!"
+                            )
+                        }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Pipelined fast-path fallback to standard muxing: ${e.message}")
+                }
+
+                // If pipelined muxer had any issue, fall through cleanly to standard export
+                performStandardExport(currentUri, deleteOriginal)
+            }
             return
         }
 
@@ -446,6 +540,10 @@ class VocalVideoPlayer(private val context: Context) {
             return
         }
 
+        performStandardExport(currentUri, deleteOriginal)
+    }
+
+    private fun performStandardExport(currentUri: Uri, deleteOriginal: Boolean) {
         val reader = cacheManager.getCachedReader(currentUri)
         val pcmData = if (reader == null) cacheManager.getCachedPcm(currentUri) else null
         if (reader == null && (pcmData == null || pcmData.isEmpty())) {
@@ -472,6 +570,7 @@ class VocalVideoPlayer(private val context: Context) {
                         sourceUri = currentUri,
                         reader = reader,
                         title = _uiState.value.mediaTitle,
+                        deleteOriginal = deleteOriginal,
                         onProgress = { prog, stage ->
                             _uiState.update {
                                 it.copy(
@@ -486,6 +585,7 @@ class VocalVideoPlayer(private val context: Context) {
                         sourceUri = currentUri,
                         cachedVocalPcm = pcmData!!,
                         title = _uiState.value.mediaTitle,
+                        deleteOriginal = deleteOriginal,
                         onProgress = { prog, stage ->
                             _uiState.update {
                                 it.copy(
@@ -503,7 +603,7 @@ class VocalVideoPlayer(private val context: Context) {
                         exportProgress = 1.0f,
                         exportStage = "Export Complete",
                         exportResult = result,
-                        statusMessage = "Video exported successfully!"
+                        statusMessage = if (result.originalDeleted) "Video exported! (Original video deleted)" else "Video exported successfully!"
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -537,6 +637,16 @@ class VocalVideoPlayer(private val context: Context) {
                 exportStage = null,
                 showExportDialog = false,
                 statusMessage = "Video export cancelled"
+            )
+        }
+    }
+
+    fun showExportVideoDialog(show: Boolean = true) {
+        _uiState.update {
+            it.copy(
+                showExportDialog = show,
+                exportResult = if (show) null else it.exportResult,
+                exportErrorMessage = if (show) null else it.exportErrorMessage
             )
         }
     }

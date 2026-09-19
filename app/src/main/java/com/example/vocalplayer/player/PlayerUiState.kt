@@ -64,6 +64,8 @@ data class PlayerUiState(
     val exportResult: com.example.vocalplayer.export.ExportResult? = null,
     val exportErrorMessage: String? = null,
     val showExportDialog: Boolean = false,
+    val deleteOriginalAfterExport: Boolean = false,
+    val isPipelinedExportReady: Boolean = false,
 
     // Dialog sheets
     val showModelManagerDialog: Boolean = false,

@@ -218,7 +218,7 @@ fun VocalPlayerScreen(
                     actions = {
                         if (uiState.isVocalCached) {
                             IconButton(
-                                onClick = { player.exportMutedInstrumentsVideo() },
+                                onClick = { player.showExportVideoDialog(true) },
                                 modifier = Modifier.testTag("action_export_video")
                             ) {
                                 Icon(
@@ -323,7 +323,7 @@ fun VocalPlayerScreen(
                     onStartExtraction = { player.extractVocalsOffline() },
                     onCancelExtraction = { player.cancelVocalExtraction() },
                     onClearCache = { player.clearVocalCache() },
-                    onExportVideo = { player.exportMutedInstrumentsVideo() }
+                    onExportVideo = { player.showExportVideoDialog(true) }
                 )
 
                 // Waveform Spectrum Visualizer
@@ -470,9 +470,13 @@ fun VocalPlayerScreen(
             stage = uiState.exportStage,
             exportResult = uiState.exportResult,
             errorMessage = uiState.exportErrorMessage,
+            deleteOriginal = uiState.deleteOriginalAfterExport,
+            onDeleteOriginalChange = { player.setDeleteOriginalAfterExport(it) },
+            isPipelinedReady = uiState.isPipelinedExportReady,
             onShareVideo = { player.shareExportedVideo() },
             onPlayExportedVideo = { player.playExportedVideo() },
             onCancelExport = { player.cancelExport() },
+            onStartExport = { player.exportMutedInstrumentsVideo() },
             onDismiss = { player.dismissExportDialog() }
         )
     }

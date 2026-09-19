@@ -29,7 +29,8 @@ data class ExportResult(
     val fileProviderUri: Uri,
     val durationMs: Long,
     val fileSizeBytes: Long,
-    val title: String
+    val title: String,
+    val originalDeleted: Boolean = false
 )
 
 /**
@@ -49,12 +50,81 @@ class VocalVideoExporter(private val context: Context) {
 
     private val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
 
+    /**
+     * Creates a new destination File for pipelined background video export.
+     */
+    fun createExportOutputFile(title: String): File {
+        val cleanTitle = title.ifBlank { "vocal_isolated" }
+            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        return File(exportDir, "${cleanTitle}_muted_instruments_${System.currentTimeMillis()}.mp4")
+    }
+
+    /**
+     * Finalizes a completed pipelined video file into MediaStore, optionally deleting the original video.
+     */
+    suspend fun finalizePipelinedVideoExport(
+        sourceUri: Uri,
+        outputFile: File,
+        title: String,
+        durationMs: Long,
+        deleteOriginal: Boolean = false,
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): ExportResult = withContext(Dispatchers.IO) {
+        val cleanTitle = title.ifBlank { "vocal_isolated" }
+            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+
+        onProgress(0.95f, "Finalizing video in media gallery...")
+        val mediaStoreUri = saveToMediaStore(outputFile, "${cleanTitle}_muted_instruments.mp4")
+        val fileProviderUri = getFileProviderUri(outputFile)
+
+        var originalDeleted = false
+        if (deleteOriginal) {
+            onProgress(0.98f, "Removing original video file as requested...")
+            originalDeleted = deleteOriginalMedia(sourceUri)
+            Log.i(tag, "Delete original video ($sourceUri) result: $originalDeleted")
+        }
+
+        onProgress(1.0f, if (originalDeleted) "Export Complete! (Original video deleted)" else "Export Complete!")
+
+        ExportResult(
+            file = outputFile,
+            mediaStoreUri = mediaStoreUri,
+            fileProviderUri = fileProviderUri,
+            durationMs = durationMs,
+            fileSizeBytes = outputFile.length(),
+            title = "$cleanTitle (Instruments Muted)",
+            originalDeleted = originalDeleted
+        )
+    }
+
+    /**
+     * Deletes the original media file if user opted in.
+     */
+    fun deleteOriginalMedia(uri: Uri): Boolean {
+        return try {
+            if (uri.scheme == "file") {
+                val path = uri.path ?: uri.toString().removePrefix("file://")
+                val f = File(path)
+                f.delete()
+            } else if (uri.scheme == "content") {
+                val deletedRows = context.contentResolver.delete(uri, null, null)
+                deletedRows > 0
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Could not delete original media at $uri: ${e.message}")
+            false
+        }
+    }
+
     suspend fun exportMutedInstrumentsVideo(
         sourceUri: Uri,
         cachedVocalPcm: ShortArray,
         title: String,
         sampleRate: Int = 44100,
         channels: Int = 2,
+        deleteOriginal: Boolean = false,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): ExportResult = exportMutedInstrumentsVideoInternal(
         sourceUri = sourceUri,
@@ -63,6 +133,7 @@ class VocalVideoExporter(private val context: Context) {
         title = title,
         sampleRate = sampleRate,
         channels = channels,
+        deleteOriginal = deleteOriginal,
         onProgress = onProgress
     )
 
@@ -72,6 +143,7 @@ class VocalVideoExporter(private val context: Context) {
         title: String,
         sampleRate: Int = 44100,
         channels: Int = 2,
+        deleteOriginal: Boolean = false,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): ExportResult = exportMutedInstrumentsVideoInternal(
         sourceUri = sourceUri,
@@ -80,6 +152,7 @@ class VocalVideoExporter(private val context: Context) {
         title = title,
         sampleRate = sampleRate,
         channels = channels,
+        deleteOriginal = deleteOriginal,
         onProgress = onProgress
     )
 
@@ -90,6 +163,7 @@ class VocalVideoExporter(private val context: Context) {
         title: String,
         sampleRate: Int = 44100,
         channels: Int = 2,
+        deleteOriginal: Boolean = false,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): ExportResult = withContext(Dispatchers.IO) {
         val cleanTitle = title.ifBlank { "vocal_isolated" }
@@ -155,7 +229,14 @@ class VocalVideoExporter(private val context: Context) {
         val mediaStoreUri = saveToMediaStore(outputFile, "${cleanTitle}_muted_instruments.mp4")
         val fileProviderUri = getFileProviderUri(outputFile)
 
-        onProgress(1.0f, "Export Complete!")
+        var originalDeleted = false
+        if (deleteOriginal) {
+            onProgress(0.98f, "Removing original video file as requested...")
+            originalDeleted = deleteOriginalMedia(sourceUri)
+            Log.i(tag, "Delete original video ($sourceUri) result: $originalDeleted")
+        }
+
+        onProgress(1.0f, if (originalDeleted) "Export Complete! (Original video deleted)" else "Export Complete!")
 
         ExportResult(
             file = outputFile,
@@ -163,7 +244,8 @@ class VocalVideoExporter(private val context: Context) {
             fileProviderUri = fileProviderUri,
             durationMs = durationMs,
             fileSizeBytes = outputFile.length(),
-            title = "$cleanTitle (Instruments Muted)"
+            title = "$cleanTitle (Instruments Muted)",
+            originalDeleted = originalDeleted
         )
     }
 

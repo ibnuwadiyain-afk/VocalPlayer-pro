@@ -8,6 +8,7 @@ import com.example.vocalplayer.audio.MediaAudioDecoder
 import com.example.vocalplayer.cache.VocalCacheManager
 import com.example.vocalplayer.dsp.STFT
 import com.example.vocalplayer.dsp.SpleeterSpectrogramTransformer
+import com.example.vocalplayer.export.PipelinedVideoMuxer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -52,10 +53,12 @@ class OfflineVocalSeparator(
     /**
      * Extracts vocal stem offline for [mediaUri] and saves to cache.
      * Streams separated vocal chunks to disk incrementally so playback can begin immediately.
+     * Optionally feeds [pipelinedMuxer] with separated chunks concurrently so the video export is ready immediately when separation finishes!
      * Invokes [onProgress] as work progresses and whenever a new chunk is ready.
      */
     suspend fun extractAndCacheVocals(
         mediaUri: Uri,
+        pipelinedMuxer: PipelinedVideoMuxer? = null,
         onProgress: (ExtractionProgress) -> Unit = {}
     ): Boolean = withContext(Dispatchers.Default) {
         if (cacheManager.isVocalCached(mediaUri) && !cacheManager.isVocalStreaming(mediaUri)) {
@@ -122,14 +125,15 @@ class OfflineVocalSeparator(
 
                 if (spleeterLoaded) {
                     Log.i(tag, "Running Deezer Spleeter 2-stem pipelined streaming isolation on estimated $estimatedFrames frames...")
-                    separateWithSpleeterStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, onProgress)
+                    separateWithSpleeterStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, pipelinedMuxer, onProgress)
                 } else {
                     Log.i(tag, "Running high-precision harmonic STFT spectral pipelined streaming isolation on estimated $estimatedFrames frames...")
-                    separateWithSpectralStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, onProgress)
+                    separateWithSpectralStream(mediaUri, decodedSource, estimatedFrames, totalDurationMs, pipelinedMuxer, onProgress)
                 }
 
                 currentCoroutineContext().ensureActive()
                 cacheManager.finishStreamingSession(mediaUri)
+                pipelinedMuxer?.finishInput()
 
                 val finalDurationMs = if (totalDurationMs > 0) totalDurationMs else (decodedSource.decodedFrames * 1000L / sampleRate.coerceAtLeast(1))
                 onProgress(
@@ -169,6 +173,7 @@ class OfflineVocalSeparator(
         source: DecodedAudioSource,
         numFrames: Int,
         totalDurationMs: Long,
+        pipelinedMuxer: PipelinedVideoMuxer? = null,
         onProgress: (ExtractionProgress) -> Unit
     ) {
         val chunkSamples = 524288 // 512 frames * 1024 hop = ~11.88 seconds
@@ -236,6 +241,7 @@ class OfflineVocalSeparator(
             }
 
             cacheManager.appendVocalChunk(mediaUri, chunkShorts, 0, chunkShorts.size, isFinal = isFinal)
+            pipelinedMuxer?.appendVocalChunk(chunkShorts, isFinal = isFinal)
             totalStreamedFrames += chunkLen
 
             chunkIndex++
@@ -266,6 +272,7 @@ class OfflineVocalSeparator(
         source: DecodedAudioSource,
         numFrames: Int,
         totalDurationMs: Long,
+        pipelinedMuxer: PipelinedVideoMuxer? = null,
         onProgress: (ExtractionProgress) -> Unit
     ) {
         val chunkSize = 65536
@@ -308,6 +315,7 @@ class OfflineVocalSeparator(
             }
 
             cacheManager.appendVocalChunk(mediaUri, chunkShorts, 0, chunkShorts.size, isFinal = isFinal)
+            pipelinedMuxer?.appendVocalChunk(chunkShorts, isFinal = isFinal)
             totalStreamedFrames += len
 
             chunkIdx++
