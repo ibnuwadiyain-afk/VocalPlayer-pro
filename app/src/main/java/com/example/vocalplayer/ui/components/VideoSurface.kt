@@ -72,7 +72,6 @@ fun VideoSurface(
     extractionElapsedSec: Long = 0L,
     onTogglePlayPause: () -> Unit = {},
     onOpenFilePicker: () -> Unit,
-    onOpenDemos: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -135,7 +134,7 @@ fun VideoSurface(
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Demucs Neural Extraction (${(extractionProgress * 100).toInt()}%)",
+                            text = "Spleeter Neural Extraction (${(extractionProgress * 100).toInt()}%)",
                             color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
@@ -266,40 +265,20 @@ fun VideoSurface(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                androidx.compose.foundation.layout.Row(
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)
+                Button(
+                    onClick = onOpenFilePicker,
+                    colors = ButtonDefaults.buttonColors(containerColor = VocalCyan),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("empty_open_video_button")
                 ) {
-                    Button(
-                        onClick = onOpenFilePicker,
-                        colors = ButtonDefaults.buttonColors(containerColor = VocalCyan),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("empty_open_video_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.VideoLibrary,
-                            contentDescription = null,
-                            tint = StudioDarkBg,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text("Open Video", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-
-                    Button(
-                        onClick = onOpenDemos,
-                        colors = ButtonDefaults.buttonColors(containerColor = StudioSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("empty_demo_clips_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Audiotrack,
-                            contentDescription = null,
-                            tint = VocalPurple,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text("Demo Clips", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                    }
+                    Icon(
+                        imageVector = Icons.Default.VideoLibrary,
+                        contentDescription = null,
+                        tint = StudioDarkBg,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text("Open Video / Audio", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }

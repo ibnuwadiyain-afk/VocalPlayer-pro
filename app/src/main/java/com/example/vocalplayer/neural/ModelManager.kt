@@ -32,9 +32,8 @@ class ModelManager(private val context: Context) {
     private var activeProfile: NeuralModelProfile = NeuralModelProfile.DEFAULT_BUILTIN
 
     init {
-        // Automatically check and stage bundled Demucs & Spleeter asset models into secure storage
+        // Automatically check and stage bundled Spleeter asset models into secure storage
         try {
-            downloader.copyAssetModelIfPresent("models/htdemucs_int8.onnx", "htdemucs_int8")
             downloader.copyAssetModelIfPresent("models/spleeter_2stems_vocals.onnx", "spleeter_2stems_vocals")
             downloader.copyAssetModelIfPresent("models/spleeter_2stems_accompaniment.onnx", "spleeter_2stems_accompaniment")
         } catch (e: Exception) {
@@ -42,21 +41,12 @@ class ModelManager(private val context: Context) {
         }
         loadInstalledModels()
 
-        // Default active profile is Demucs v4 Dynamic Quantized INT8
-        activeProfile = NeuralModelProfile.DEMUCS_INT8
+        // Default active profile is Deezer Spleeter 2-Stem
+        activeProfile = NeuralModelProfile.SPLEETER_2STEMS
     }
 
     fun loadInstalledModels() {
         userModels.clear()
-
-        // Register built-in Demucs v4 Quantized INT8 model
-        val demucsFile = downloader.getSecureModelFile("htdemucs_int8")
-        val demucsProfile = NeuralModelProfile.DEMUCS_INT8.copy(
-            modelPath = if (demucsFile.exists()) demucsFile.absolutePath else null,
-            isDownloaded = true,
-            fileSizeFormatted = if (demucsFile.exists()) "${demucsFile.length() / (1024 * 1024)} MB (Built-in)" else "80 MB (Built-in)"
-        )
-        userModels.add(demucsProfile)
 
         // Register built-in Deezer Spleeter 2-Stem model
         val vocalsFile = downloader.getSecureModelFile("spleeter_2stems_vocals")
@@ -71,15 +61,14 @@ class ModelManager(private val context: Context) {
 
         val files = downloader.listSecureModels()
         files.forEach { file ->
-            if (file.name.contains("spleeter_2stems", ignoreCase = true) || file.name.contains("htdemucs_int8", ignoreCase = true)) {
+            if (file.name.contains("spleeter_2stems", ignoreCase = true)) {
                 return@forEach // Already handled as built-in
             }
             val modelId = "custom_${file.nameWithoutExtension}"
             val matchingPreset = NeuralModelProfile.PRESET_PROFILES.find {
                 downloader.sanitizeModelFileName(it.id) == file.name ||
                         it.id == file.nameWithoutExtension ||
-                        file.nameWithoutExtension.contains(it.id, ignoreCase = true) ||
-                        (it.id == NeuralModelProfile.UVR_MDXNET_9482.id && file.name.contains("9482", ignoreCase = true))
+                        file.nameWithoutExtension.contains(it.id, ignoreCase = true)
             }
 
             if (matchingPreset != null) {

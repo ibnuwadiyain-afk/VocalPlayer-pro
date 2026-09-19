@@ -54,7 +54,7 @@ import com.example.ui.theme.VocalPink
 import com.example.ui.theme.VocalPurple
 
 /**
- * Visual card displaying offline Demucs vocal extraction progress,
+ * Visual card displaying offline Spleeter vocal extraction progress,
  * cache status, and fast action triggers.
  */
 @Composable
@@ -270,7 +270,7 @@ fun OfflineExtractionCard(
                             Column {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "Demucs Vocals Cached",
+                                        text = "Spleeter Vocals Cached",
                                         color = TextPrimary,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold
@@ -294,7 +294,7 @@ fun OfflineExtractionCard(
                                     text = if (elapsedSeconds > 0) {
                                         "Extracted in $formattedElapsed • ${"%.1f".format(cacheSizeMb)} MB Cached"
                                     } else {
-                                        "Dynamic Quantized INT8 ONNX • ${"%.1f".format(cacheSizeMb)} MB Cached"
+                                        "Deezer Spleeter 2-Stem ONNX • ${"%.1f".format(cacheSizeMb)} MB Cached"
                                     },
                                     color = TextSecondary,
                                     fontSize = 11.sp
@@ -385,7 +385,7 @@ fun OfflineExtractionCard(
 
                             Column {
                                 Text(
-                                    text = "Demucs Offline Isolation",
+                                    text = "Spleeter Offline Isolation",
                                     color = TextPrimary,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold

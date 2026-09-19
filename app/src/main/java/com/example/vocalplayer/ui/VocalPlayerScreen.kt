@@ -75,7 +75,6 @@ import com.example.vocalplayer.ui.components.VideoSurface
 import com.example.vocalplayer.ui.components.VocalToggleBar
 import com.example.vocalplayer.ui.components.WaveformVisualizer
 import com.example.vocalplayer.ui.dialogs.BenchmarkDialog
-import com.example.vocalplayer.ui.dialogs.DemoClipsDialog
 import com.example.vocalplayer.ui.dialogs.ExportVideoDialog
 import com.example.vocalplayer.ui.dialogs.ModelManagerDialog
 import com.example.vocalplayer.ui.dialogs.SettingsDialog
@@ -147,7 +146,6 @@ fun VocalPlayerScreen(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
                     )
                 },
-                onOpenDemos = { player.showDemoClipsDialog(true) },
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -218,17 +216,6 @@ fun VocalPlayerScreen(
                         }
                     },
                     actions = {
-                        IconButton(
-                            onClick = { player.showDemoClipsDialog(true) },
-                            modifier = Modifier.testTag("action_demo_clips")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Audiotrack,
-                                contentDescription = "Demo Clips",
-                                tint = TextSecondary
-                            )
-                        }
-
                         if (uiState.isVocalCached) {
                             IconButton(
                                 onClick = { player.exportMutedInstrumentsVideo() },
@@ -299,7 +286,6 @@ fun VocalPlayerScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
                         )
                     },
-                    onOpenDemos = { player.showDemoClipsDialog(true) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 10f)
@@ -323,7 +309,7 @@ fun VocalPlayerScreen(
                     }
                 }
 
-                // Offline Demucs Extraction & Cache Progress Card
+                // Offline Spleeter Extraction & Cache Progress Card
                 OfflineExtractionCard(
                     isExtracting = uiState.isExtractingVocals,
                     isCached = uiState.isVocalCached,
@@ -474,14 +460,6 @@ fun VocalPlayerScreen(
             benchmarkResult = uiState.benchmarkResult,
             onRunBenchmark = { player.runBenchmark(uiState.activeModel) },
             onDismiss = { player.showBenchmarkDialog(false) }
-        )
-    }
-
-    if (uiState.showDemoClipsDialog) {
-        DemoClipsDialog(
-            demoClips = uiState.demoClips,
-            onSelectClip = { clip -> player.loadMedia(clip.uri, clip.title) },
-            onDismiss = { player.showDemoClipsDialog(false) }
         )
     }
 

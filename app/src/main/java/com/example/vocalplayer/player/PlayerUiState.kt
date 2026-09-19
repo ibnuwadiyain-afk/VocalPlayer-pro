@@ -1,7 +1,6 @@
 package com.example.vocalplayer.player
 
 import android.net.Uri
-import com.example.vocalplayer.data.DemoClip
 import com.example.vocalplayer.neural.BenchmarkResult
 import com.example.vocalplayer.neural.DownloadProgress
 import com.example.vocalplayer.neural.NeuralModelProfile
@@ -26,7 +25,7 @@ data class PlayerUiState(
     val isEnded: Boolean = false,
     val hasMediaLoaded: Boolean = false,
 
-    // Offline Demucs Vocal Extraction & Caching state
+    // Offline Spleeter Vocal Extraction & Caching state
     val isVocalCached: Boolean = false,
     val isExtractingVocals: Boolean = false,
     val isStreamingVocal: Boolean = false,
@@ -49,7 +48,6 @@ data class PlayerUiState(
     val separationMode: SeparationMode = SeparationMode.BALANCED,
     val threadCount: Int = 4,
     val availableModels: List<NeuralModelProfile> = emptyList(),
-    val demoClips: List<DemoClip> = emptyList(),
 
     // Model downloader & verification state
     val downloadingModelId: String? = null,
@@ -71,7 +69,6 @@ data class PlayerUiState(
     val showModelManagerDialog: Boolean = false,
     val showSettingsDialog: Boolean = false,
     val showBenchmarkDialog: Boolean = false,
-    val showDemoClipsDialog: Boolean = false,
     val statusMessage: String? = null
 ) {
     /** True when at least one separated vocal audio chunk is available to play. */

@@ -31,20 +31,6 @@ data class NeuralModelProfile(
     val isDownloaded: Boolean = false
 ) {
     companion object {
-        val DEMUCS_INT8 = NeuralModelProfile(
-            id = "demucs_v4_int8",
-            name = "Demucs v4 (Quantized INT8)",
-            architecture = ModelArchitecture.DEMUCS_WAVE,
-            description = "State-of-the-art Demucs v4 Hybrid Transformer with dynamic INT8 quantization. Processes offline into cache for 0ms lag-free playback.",
-            sampleRate = 44100,
-            isStereo = true,
-            isBuiltIn = true,
-            fileSizeFormatted = "80 MB (Quantized INT8 Built-in)",
-            latencyEstimateMs = 0,
-            recommendedMode = SeparationMode.QUALITY,
-            isDownloaded = true
-        )
-
         val SPLEETER_2STEMS = NeuralModelProfile(
             id = "spleeter_2stems",
             name = "Deezer Spleeter 2-Stem",
@@ -59,74 +45,10 @@ data class NeuralModelProfile(
             isDownloaded = true
         )
 
-        val DEFAULT_BUILTIN = DEMUCS_INT8
-
-        val UVR_MDXNET_9482 = NeuralModelProfile(
-            id = "uvr_mdxnet_9482",
-            name = "UVR-MDX-NET 9482 (Vocal)",
-            architecture = ModelArchitecture.MDX_NET,
-            description = "True genuine UVR MDX-Net 9482 model (SDR 9.482). Official 4-channel complex STFT neural vocal separation.",
-            sampleRate = 44100,
-            isStereo = true,
-            isBuiltIn = false,
-            fileSizeFormatted = "28.3 MB (ONNX)",
-            latencyEstimateMs = 45,
-            recommendedMode = SeparationMode.BALANCED,
-            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR_MDXNET_9482.onnx",
-            sha256Checksum = "9d78f8566fa8198065214ab628be1de966a500c57786695aa4b13e2b27a7727d",
-            expectedSizeBytes = 29_742_080L,
-            isDownloaded = false
-        )
+        val DEFAULT_BUILTIN = SPLEETER_2STEMS
 
         val PRESET_PROFILES = listOf(
-            DEMUCS_INT8,
-            SPLEETER_2STEMS,
-            UVR_MDXNET_9482,
-            NeuralModelProfile(
-                id = "mdx_net_vocal_hq",
-                name = "MDX-Net UVR Vocal",
-                architecture = ModelArchitecture.MDX_NET,
-                description = "UVR MDX-Net ONNX architecture with high frequency vocal detail extraction.",
-                sampleRate = 44100,
-                isStereo = true,
-                isBuiltIn = false,
-                fileSizeFormatted = "~45 MB (ONNX)",
-                latencyEstimateMs = 55,
-                recommendedMode = SeparationMode.QUALITY,
-                downloadUrl = "https://github.com/Anjok07/ultimatevocalremovergui/releases/download/v5.5.0/MDX-Net-Voc_FT.onnx",
-                sha256Checksum = "8a32490b790d0b0a8809df8e040441584c5da07d7cfb395ad60c8cb81a2f6460",
-                expectedSizeBytes = 47_185_920L
-            ),
-            NeuralModelProfile(
-                id = "mel_roformer_lite",
-                name = "Mel-Roformer Lite",
-                architecture = ModelArchitecture.MEL_ROFORMER,
-                description = "Lightweight RoFormer rotary self-attention neural vocal isolation.",
-                sampleRate = 44100,
-                isStereo = true,
-                isBuiltIn = false,
-                fileSizeFormatted = "~60 MB (ONNX)",
-                latencyEstimateMs = 70,
-                recommendedMode = SeparationMode.BALANCED,
-                downloadUrl = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/mel_band_roformer_vocals.onnx",
-                sha256Checksum = "c5538e3e4b77053eef6a084c05273dfda16c52a05cfef78ff70cbbfe97d02ad8",
-                expectedSizeBytes = 62_914_560L
-            ),
-            NeuralModelProfile(
-                id = "demucs_v4_mobile",
-                name = "Demucs v4 Hybrid Mobile",
-                architecture = ModelArchitecture.DEMUCS_WAVE,
-                description = "Dual-domain time+frequency hybrid Demucs variant for acoustic separation.",
-                sampleRate = 44100,
-                isStereo = true,
-                isBuiltIn = false,
-                fileSizeFormatted = "~80 MB (ONNX)",
-                latencyEstimateMs = 90,
-                recommendedMode = SeparationMode.PERFORMANCE,
-                downloadUrl = "https://github.com/facebookresearch/demucs/releases/download/v4.0.0/htdemucs_ft.onnx",
-                sha256Checksum = "4518bb122a61175653fe98950cf6bbcdb20755efc051a8f6be4ecfe6a4f6cf94",
-                expectedSizeBytes = 83_886_080L
-            )
+            SPLEETER_2STEMS
         )
     }
 }

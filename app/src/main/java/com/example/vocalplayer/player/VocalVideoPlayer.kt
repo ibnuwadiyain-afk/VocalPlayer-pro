@@ -17,7 +17,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.example.vocalplayer.audio.NeuralAudioProcessor
-import com.example.vocalplayer.data.SampleClipsManager
 import com.example.vocalplayer.neural.ModelManager
 import com.example.vocalplayer.neural.NeuralModelProfile
 import com.example.vocalplayer.neural.NeuralSeparationEngine
@@ -40,7 +39,6 @@ class VocalVideoPlayer(private val context: Context) {
 
     val cacheManager = com.example.vocalplayer.cache.VocalCacheManager(context)
     private val modelManager = ModelManager(context)
-    private val sampleClipsManager = SampleClipsManager(context, cacheManager)
     val offlineVocalSeparator = com.example.vocalplayer.neural.OfflineVocalSeparator(context, cacheManager, modelManager)
     val videoExporter = com.example.vocalplayer.export.VocalVideoExporter(context)
 
@@ -100,7 +98,6 @@ class VocalVideoPlayer(private val context: Context) {
         refreshModelsList()
         val initialModel = modelManager.getActiveModel()
         selectModel(initialModel)
-        loadDemoClips()
     }
 
     private fun setupPlayerListeners() {
@@ -265,7 +262,7 @@ class VocalVideoPlayer(private val context: Context) {
                 streamedDurationMs = 0L,
                 extractionElapsedSec = 0L,
                 cacheSizeMb = cacheManager.getCacheSizeMb(),
-                statusMessage = if (isCached) "Demucs Vocals Loaded (0ms Lag Cached Playback)" else null
+                statusMessage = if (isCached) "Spleeter Vocals Loaded (0ms Lag Cached Playback)" else null
             )
         }
 
@@ -679,13 +676,6 @@ class VocalVideoPlayer(private val context: Context) {
         _uiState.update { it.copy(availableModels = models) }
     }
 
-    private fun loadDemoClips() {
-        scope.launch {
-            val clips = sampleClipsManager.getDemoClips()
-            _uiState.update { it.copy(demoClips = clips) }
-        }
-    }
-
     fun showModelManagerDialog(show: Boolean) {
         _uiState.update { it.copy(showModelManagerDialog = show) }
     }
@@ -696,10 +686,6 @@ class VocalVideoPlayer(private val context: Context) {
 
     fun showBenchmarkDialog(show: Boolean) {
         _uiState.update { it.copy(showBenchmarkDialog = show) }
-    }
-
-    fun showDemoClipsDialog(show: Boolean) {
-        _uiState.update { it.copy(showDemoClipsDialog = show) }
     }
 
     fun clearStatusMessage() {
