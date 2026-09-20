@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Movie
@@ -76,6 +77,7 @@ import com.example.vocalplayer.ui.components.VocalToggleBar
 import com.example.vocalplayer.ui.components.WaveformVisualizer
 import com.example.vocalplayer.ui.dialogs.BenchmarkDialog
 import com.example.vocalplayer.ui.dialogs.ExportVideoDialog
+import com.example.vocalplayer.ui.dialogs.LiveStreamDialog
 import com.example.vocalplayer.ui.dialogs.ModelManagerDialog
 import com.example.vocalplayer.ui.dialogs.SettingsDialog
 
@@ -216,6 +218,17 @@ fun VocalPlayerScreen(
                         }
                     },
                     actions = {
+                        IconButton(
+                            onClick = { player.showLiveStreamDialog(true) },
+                            modifier = Modifier.testTag("action_live_stream")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LiveTv,
+                                contentDescription = "Play Live Stream",
+                                tint = if (uiState.isLiveStream) VocalCyan else TextSecondary
+                            )
+                        }
+
                         if (uiState.isVocalCached) {
                             IconButton(
                                 onClick = { player.showExportVideoDialog(true) },
@@ -276,6 +289,7 @@ fun VocalPlayerScreen(
                     isVocalOnly = uiState.isVocalOnly,
                     isPlaying = uiState.isPlaying,
                     isEnded = uiState.isEnded,
+                    isLiveStream = uiState.isLiveStream,
                     isExtractingVocals = uiState.isExtractingVocals,
                     isStreamingVocal = uiState.isStreamingVocal,
                     extractionProgress = uiState.extractionProgress,
@@ -286,6 +300,7 @@ fun VocalPlayerScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
                         )
                     },
+                    onOpenLiveStreamDialog = { player.showLiveStreamDialog(true) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 10f)
@@ -309,22 +324,24 @@ fun VocalPlayerScreen(
                     }
                 }
 
-                // Offline Spleeter Extraction & Cache Progress Card
-                OfflineExtractionCard(
-                    isExtracting = uiState.isExtractingVocals,
-                    isCached = uiState.isVocalCached,
-                    isStreaming = uiState.isStreamingVocal,
-                    streamedDurationMs = uiState.streamedDurationMs,
-                    elapsedSeconds = uiState.extractionElapsedSec,
-                    extractionStage = uiState.extractionStage,
-                    extractionProgress = uiState.extractionProgress,
-                    cacheSizeMb = uiState.cacheSizeMb,
-                    hasMediaLoaded = uiState.hasMediaLoaded,
-                    onStartExtraction = { player.extractVocalsOffline() },
-                    onCancelExtraction = { player.cancelVocalExtraction() },
-                    onClearCache = { player.clearVocalCache() },
-                    onExportVideo = { player.showExportVideoDialog(true) }
-                )
+                // Offline Spleeter Extraction & Cache Progress Card (for local media files)
+                if (!uiState.isLiveStream) {
+                    OfflineExtractionCard(
+                        isExtracting = uiState.isExtractingVocals,
+                        isCached = uiState.isVocalCached,
+                        isStreaming = uiState.isStreamingVocal,
+                        streamedDurationMs = uiState.streamedDurationMs,
+                        elapsedSeconds = uiState.extractionElapsedSec,
+                        extractionStage = uiState.extractionStage,
+                        extractionProgress = uiState.extractionProgress,
+                        cacheSizeMb = uiState.cacheSizeMb,
+                        hasMediaLoaded = uiState.hasMediaLoaded,
+                        onStartExtraction = { player.extractVocalsOffline() },
+                        onCancelExtraction = { player.cancelVocalExtraction() },
+                        onClearCache = { player.clearVocalCache() },
+                        onExportVideo = { player.showExportVideoDialog(true) }
+                    )
+                }
 
                 // Waveform Spectrum Visualizer
                 WaveformVisualizer(
@@ -394,7 +411,7 @@ fun VocalPlayerScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Open Video", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Video", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
 
                     Button(
@@ -414,7 +431,27 @@ fun VocalPlayerScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("All Media", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        Text("Files", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            player.showLiveStreamDialog(true)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = VocalPurple.copy(alpha = 0.85f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("open_livestream_picker_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LiveTv,
+                            contentDescription = null,
+                            tint = TextPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Live Stream", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -450,6 +487,16 @@ fun VocalPlayerScreen(
             onModeSelected = { mode -> player.setSeparationMode(mode) },
             onThreadCountSelected = { count -> player.setThreadCount(count) },
             onDismiss = { player.showSettingsDialog(false) }
+        )
+    }
+
+    if (uiState.showLiveStreamDialog) {
+        LiveStreamDialog(
+            initialUrl = uiState.liveStreamUrl,
+            onPlayStream = { url, title ->
+                player.playLiveStream(url, title)
+            },
+            onDismiss = { player.showLiveStreamDialog(false) }
         )
     }
 

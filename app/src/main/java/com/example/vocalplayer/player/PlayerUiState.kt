@@ -67,17 +67,22 @@ data class PlayerUiState(
     val deleteOriginalAfterExport: Boolean = false,
     val isPipelinedExportReady: Boolean = false,
 
+    // Live stream state
+    val isLiveStream: Boolean = false,
+    val liveStreamUrl: String? = null,
+    val showLiveStreamDialog: Boolean = false,
+
     // Dialog sheets
     val showModelManagerDialog: Boolean = false,
     val showSettingsDialog: Boolean = false,
     val showBenchmarkDialog: Boolean = false,
     val statusMessage: String? = null
 ) {
-    /** True when at least one separated vocal audio chunk is available to play. */
+    /** True when at least one separated vocal audio chunk is available to play, or live streaming. */
     val hasVocalChunksGenerated: Boolean
-        get() = isVocalCached || isStreamingVocal || (streamedDurationMs > 0L)
+        get() = isLiveStream || isVocalCached || isStreamingVocal || (streamedDurationMs > 0L)
 
-    /** Prevents toggling vocal-only mode until separated vocal audio chunks are generated. */
+    /** Prevents toggling vocal-only mode until separated vocal audio chunks are generated or live stream is active. */
     val canToggleVocalOnly: Boolean
         get() = hasVocalChunksGenerated
 }

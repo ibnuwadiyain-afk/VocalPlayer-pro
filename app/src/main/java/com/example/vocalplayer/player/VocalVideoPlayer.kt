@@ -246,11 +246,32 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun loadMedia(uri: Uri, title: String? = null) {
-        val resolvedTitle = title ?: resolveFileName(uri) ?: "Local Media File"
-        audioProcessor.activeMediaUri = uri
-        val isCached = cacheManager.isVocalCached(uri)
+        val uriString = uri.toString()
+        val isNetworkStream = uri.scheme in listOf("http", "https", "rtsp", "rtmp")
+        val isLiveStreamFormat = uriString.contains(".m3u8", ignoreCase = true) ||
+                uriString.contains(".mpd", ignoreCase = true) ||
+                uriString.contains("/live", ignoreCase = true) ||
+                uriString.contains("/stream", ignoreCase = true)
 
-        val mediaItem = MediaItem.fromUri(uri)
+        val resolvedTitle = title ?: resolveFileName(uri) ?: if (isNetworkStream) {
+            if (isLiveStreamFormat) "Live Stream (${uri.host ?: "Network"})" else "Network Stream (${uri.lastPathSegment ?: "Media"})"
+        } else "Local Media File"
+
+        // Cancel previous operations
+        cancelVocalExtraction()
+        cancelExport()
+
+        audioProcessor.activeMediaUri = uri
+        val isCached = !isNetworkStream && cacheManager.isVocalCached(uri)
+
+        val mediaItemBuilder = MediaItem.Builder().setUri(uri)
+        if (uriString.contains(".m3u8", ignoreCase = true)) {
+            mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+        } else if (uriString.contains(".mpd", ignoreCase = true)) {
+            mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
+        }
+        val mediaItem = mediaItemBuilder.build()
+
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
 
@@ -259,13 +280,20 @@ class VocalVideoPlayer(private val context: Context) {
                 mediaUri = uri,
                 mediaTitle = resolvedTitle,
                 hasMediaLoaded = true,
+                isLiveStream = isLiveStreamFormat || isNetworkStream,
+                liveStreamUrl = if (isNetworkStream) uriString else null,
                 currentPositionMs = 0L,
                 isVocalCached = isCached,
                 isStreamingVocal = false,
                 streamedDurationMs = 0L,
                 extractionElapsedSec = 0L,
                 cacheSizeMb = cacheManager.getCacheSizeMb(),
-                statusMessage = if (isCached) "Spleeter Vocals Loaded (0ms Lag Cached Playback)" else null
+                statusMessage = when {
+                    isLiveStreamFormat -> "Playing Live Stream: Neural separation active in real-time"
+                    isCached -> "Spleeter Vocals Loaded (0ms Lag Cached Playback)"
+                    isNetworkStream -> "Streaming network media: Neural separation active"
+                    else -> null
+                }
             )
         }
 
@@ -281,8 +309,18 @@ class VocalVideoPlayer(private val context: Context) {
             }
             exoPlayer.seekTo(0L)
             exoPlayer.play()
+        } else if (isNetworkStream) {
+            // Live / Network stream: play immediately! Real-time NeuralAudioProcessor separates live on the fly
+            audioProcessor.isVocalOnlyEnabled = false
+            _uiState.update {
+                it.copy(
+                    isVocalOnly = false,
+                    statusMessage = "Live stream connected • Toggle Vocal Only anytime for real-time neural separation."
+                )
+            }
+            exoPlayer.play()
         } else {
-            // Keep at start while extraction isolates vocals in background
+            // Local file: isolate vocals in background while pausing at start for complete offline caching
             audioProcessor.isVocalOnlyEnabled = false
             _uiState.update {
                 it.copy(
@@ -294,6 +332,17 @@ class VocalVideoPlayer(private val context: Context) {
             exoPlayer.seekTo(0L)
             extractVocalsOffline(uri)
         }
+    }
+
+    fun playLiveStream(url: String, title: String? = null) {
+        val cleanUrl = url.trim()
+        if (cleanUrl.isBlank()) return
+        val uri = Uri.parse(cleanUrl)
+        loadMedia(uri, title ?: "Live Stream (${uri.host ?: cleanUrl.take(20)})")
+    }
+
+    fun showLiveStreamDialog(show: Boolean) {
+        _uiState.update { it.copy(showLiveStreamDialog = show) }
     }
 
     fun extractVocalsOffline(targetUri: Uri? = null) {

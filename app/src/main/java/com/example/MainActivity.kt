@@ -1,6 +1,9 @@
 package com.example
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -21,7 +24,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val videoPlayer = remember {
-                VocalVideoPlayer(this).also { player = it }
+                VocalVideoPlayer(this).also {
+                    player = it
+                    handleIncomingIntent(intent, it)
+                }
             }
 
             DisposableEffect(Unit) {
@@ -35,6 +41,27 @@ class MainActivity : ComponentActivity() {
                     player = videoPlayer,
                     modifier = Modifier.fillMaxSize()
                 )
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        player?.let { handleIncomingIntent(intent, it) }
+    }
+
+    private fun handleIncomingIntent(incomingIntent: Intent?, targetPlayer: VocalVideoPlayer) {
+        if (incomingIntent == null) return
+        val action = incomingIntent.action
+        val dataUri: Uri? = incomingIntent.data
+
+        if (Intent.ACTION_VIEW == action && dataUri != null) {
+            try {
+                Log.i("MainActivity", "Handling incoming media URI: $dataUri (type=${incomingIntent.type})")
+                targetPlayer.loadMedia(dataUri)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to handle incoming media URI: ${e.message}", e)
             }
         }
     }
