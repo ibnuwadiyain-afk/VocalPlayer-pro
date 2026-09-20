@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,15 +17,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.foundation.border
-import androidx.compose.material.icons.filled.CellTower
-import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
@@ -35,7 +33,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -72,14 +69,13 @@ fun VideoSurface(
     isVocalOnly: Boolean,
     isPlaying: Boolean = false,
     isEnded: Boolean = false,
-    isLiveStream: Boolean = false,
     isExtractingVocals: Boolean = false,
     isStreamingVocal: Boolean = false,
     extractionProgress: Float = 0f,
     extractionElapsedSec: Long = 0L,
     onTogglePlayPause: () -> Unit = {},
     onOpenFilePicker: () -> Unit,
-    onOpenLiveStreamDialog: () -> Unit = {},
+    onOpenUrlImport: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -211,53 +207,22 @@ fun VideoSurface(
             }
 
             // Small Floating "Vocal Only" or "Original" badge in top-left of video
-            Row(
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(12.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isLiveStream) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color.Red.copy(alpha = 0.85f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "LIVE STREAM",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (isVocalOnly) VocalCyan.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.65f)
-                        )
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = if (isVocalOnly) "VOCAL STEM ACTIVE" else "ORIGINAL AUDIO",
-                        color = if (isVocalOnly) StudioDarkBg else TextPrimary,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                    .padding(12.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (isVocalOnly) VocalCyan.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.65f)
                     )
-                }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = if (isVocalOnly) "VOCAL STEM ACTIVE" else "ORIGINAL AUDIO",
+                    color = if (isVocalOnly) StudioDarkBg else TextPrimary,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         } else {
             // Empty State: Hero Banner & Prompts
@@ -295,7 +260,7 @@ fun VideoSurface(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
-                    text = "Play local media or live streams (HLS/DASH) with synchronized real-time vocal isolation.",
+                    text = "Select any local video or audio file to extract synchronized vocals in real time.",
                     color = TextSecondary,
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
@@ -304,10 +269,7 @@ fun VideoSurface(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Row(
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = onOpenFilePicker,
                         colors = ButtonDefaults.buttonColors(containerColor = VocalCyan),
@@ -321,24 +283,25 @@ fun VideoSurface(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.size(6.dp))
-                        Text("Open Media", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Open File", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
 
-                    OutlinedButton(
-                        onClick = onOpenLiveStreamDialog,
-                        shape = RoundedCornerShape(10.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, VocalPurple),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VocalPurple),
-                        modifier = Modifier.testTag("empty_open_livestream_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.LiveTv,
-                            contentDescription = null,
-                            tint = VocalPurple,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text("Live Stream", color = VocalPurple, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    if (onOpenUrlImport != null) {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = onOpenUrlImport,
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, VocalPurple),
+                            modifier = Modifier.testTag("empty_import_web_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Link,
+                                contentDescription = null,
+                                tint = VocalPurple,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.size(6.dp))
+                            Text("Import Link", color = VocalPurple, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
                     }
                 }
             }

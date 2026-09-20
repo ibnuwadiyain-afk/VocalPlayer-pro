@@ -301,18 +301,6 @@ class ExampleUnitTest {
     assertEquals("01:05", formatElapsed(65L))
     assertEquals("12:34", formatElapsed(754L))
   }
-
-  @Test
-  fun testLiveStreamStateAndVocalToggle() {
-    val liveState = com.example.vocalplayer.player.PlayerUiState(
-      isLiveStream = true,
-      liveStreamUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-      hasMediaLoaded = true
-    )
-    assertTrue("Live stream should allow vocal-only toggle for real-time separation", liveState.canToggleVocalOnly)
-    assertTrue(liveState.hasVocalChunksGenerated)
-    assertEquals("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8", liveState.liveStreamUrl)
-  }
 }
 
 

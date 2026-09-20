@@ -25,7 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Movie
@@ -77,9 +77,9 @@ import com.example.vocalplayer.ui.components.VocalToggleBar
 import com.example.vocalplayer.ui.components.WaveformVisualizer
 import com.example.vocalplayer.ui.dialogs.BenchmarkDialog
 import com.example.vocalplayer.ui.dialogs.ExportVideoDialog
-import com.example.vocalplayer.ui.dialogs.LiveStreamDialog
 import com.example.vocalplayer.ui.dialogs.ModelManagerDialog
 import com.example.vocalplayer.ui.dialogs.SettingsDialog
+import com.example.vocalplayer.ui.dialogs.UrlImportDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -219,13 +219,13 @@ fun VocalPlayerScreen(
                     },
                     actions = {
                         IconButton(
-                            onClick = { player.showLiveStreamDialog(true) },
-                            modifier = Modifier.testTag("action_live_stream")
+                            onClick = { player.showUrlImportDialog(true) },
+                            modifier = Modifier.testTag("action_import_url")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.LiveTv,
-                                contentDescription = "Play Live Stream",
-                                tint = if (uiState.isLiveStream) VocalCyan else TextSecondary
+                                imageVector = Icons.Default.Link,
+                                contentDescription = "Import Web Media",
+                                tint = VocalCyan
                             )
                         }
 
@@ -289,7 +289,6 @@ fun VocalPlayerScreen(
                     isVocalOnly = uiState.isVocalOnly,
                     isPlaying = uiState.isPlaying,
                     isEnded = uiState.isEnded,
-                    isLiveStream = uiState.isLiveStream,
                     isExtractingVocals = uiState.isExtractingVocals,
                     isStreamingVocal = uiState.isStreamingVocal,
                     extractionProgress = uiState.extractionProgress,
@@ -300,7 +299,7 @@ fun VocalPlayerScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
                         )
                     },
-                    onOpenLiveStreamDialog = { player.showLiveStreamDialog(true) },
+                    onOpenUrlImport = { player.showUrlImportDialog(true) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 10f)
@@ -324,24 +323,22 @@ fun VocalPlayerScreen(
                     }
                 }
 
-                // Offline Spleeter Extraction & Cache Progress Card (for local media files)
-                if (!uiState.isLiveStream) {
-                    OfflineExtractionCard(
-                        isExtracting = uiState.isExtractingVocals,
-                        isCached = uiState.isVocalCached,
-                        isStreaming = uiState.isStreamingVocal,
-                        streamedDurationMs = uiState.streamedDurationMs,
-                        elapsedSeconds = uiState.extractionElapsedSec,
-                        extractionStage = uiState.extractionStage,
-                        extractionProgress = uiState.extractionProgress,
-                        cacheSizeMb = uiState.cacheSizeMb,
-                        hasMediaLoaded = uiState.hasMediaLoaded,
-                        onStartExtraction = { player.extractVocalsOffline() },
-                        onCancelExtraction = { player.cancelVocalExtraction() },
-                        onClearCache = { player.clearVocalCache() },
-                        onExportVideo = { player.showExportVideoDialog(true) }
-                    )
-                }
+                // Offline Spleeter Extraction & Cache Progress Card
+                OfflineExtractionCard(
+                    isExtracting = uiState.isExtractingVocals,
+                    isCached = uiState.isVocalCached,
+                    isStreaming = uiState.isStreamingVocal,
+                    streamedDurationMs = uiState.streamedDurationMs,
+                    elapsedSeconds = uiState.extractionElapsedSec,
+                    extractionStage = uiState.extractionStage,
+                    extractionProgress = uiState.extractionProgress,
+                    cacheSizeMb = uiState.cacheSizeMb,
+                    hasMediaLoaded = uiState.hasMediaLoaded,
+                    onStartExtraction = { player.extractVocalsOffline() },
+                    onCancelExtraction = { player.cancelVocalExtraction() },
+                    onClearCache = { player.clearVocalCache() },
+                    onExportVideo = { player.showExportVideoDialog(true) }
+                )
 
                 // Waveform Spectrum Visualizer
                 WaveformVisualizer(
@@ -411,7 +408,7 @@ fun VocalPlayerScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Video", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Open Video", color = StudioDarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
 
                     Button(
@@ -431,27 +428,7 @@ fun VocalPlayerScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Files", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                    }
-
-                    Button(
-                        onClick = {
-                            player.showLiveStreamDialog(true)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = VocalPurple.copy(alpha = 0.85f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("open_livestream_picker_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.LiveTv,
-                            contentDescription = null,
-                            tint = TextPrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Live Stream", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("All Media", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                     }
                 }
             }
@@ -490,16 +467,6 @@ fun VocalPlayerScreen(
         )
     }
 
-    if (uiState.showLiveStreamDialog) {
-        LiveStreamDialog(
-            initialUrl = uiState.liveStreamUrl,
-            onPlayStream = { url, title ->
-                player.playLiveStream(url, title)
-            },
-            onDismiss = { player.showLiveStreamDialog(false) }
-        )
-    }
-
     if (uiState.showBenchmarkDialog) {
         BenchmarkDialog(
             activeModel = uiState.activeModel,
@@ -525,6 +492,21 @@ fun VocalPlayerScreen(
             onCancelExport = { player.cancelExport() },
             onStartExport = { player.exportMutedInstrumentsVideo() },
             onDismiss = { player.dismissExportDialog() }
+        )
+    }
+
+    if (uiState.showUrlImportDialog) {
+        UrlImportDialog(
+            isProbing = uiState.isProbingUrl,
+            isDownloading = uiState.isDownloadingMedia,
+            probedInfo = uiState.probedMediaInfo,
+            selectedOption = uiState.selectedResolutionOption,
+            importProgress = uiState.importProgress,
+            errorMessage = uiState.importErrorMessage,
+            onProbeUrl = { url -> player.probeUrl(url) },
+            onSelectOption = { option -> player.selectImportResolutionOption(option) },
+            onStartDownload = { player.downloadAndLoadImportedMedia() },
+            onDismiss = { player.showUrlImportDialog(false) }
         )
     }
 }

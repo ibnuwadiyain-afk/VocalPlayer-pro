@@ -3,12 +3,12 @@ package com.example
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.example.ui.theme.MyApplicationTheme
@@ -24,16 +24,18 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val videoPlayer = remember {
-                VocalVideoPlayer(this).also {
-                    player = it
-                    handleIncomingIntent(intent, it)
-                }
+                VocalVideoPlayer(this).also { player = it }
             }
 
             DisposableEffect(Unit) {
                 onDispose {
                     videoPlayer.release()
                 }
+            }
+
+            // Handle incoming shared links or media from other apps
+            LaunchedEffect(intent) {
+                handleIncomingIntent(intent, videoPlayer)
             }
 
             MyApplicationTheme {
@@ -51,17 +53,23 @@ class MainActivity : ComponentActivity() {
         player?.let { handleIncomingIntent(intent, it) }
     }
 
-    private fun handleIncomingIntent(incomingIntent: Intent?, targetPlayer: VocalVideoPlayer) {
-        if (incomingIntent == null) return
-        val action = incomingIntent.action
-        val dataUri: Uri? = incomingIntent.data
+    private fun handleIncomingIntent(intent: Intent?, videoPlayer: VocalVideoPlayer) {
+        if (intent == null || intent.action != Intent.ACTION_SEND) return
 
-        if (Intent.ACTION_VIEW == action && dataUri != null) {
-            try {
-                Log.i("MainActivity", "Handling incoming media URI: $dataUri (type=${incomingIntent.type})")
-                targetPlayer.loadMedia(dataUri)
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to handle incoming media URI: ${e.message}", e)
+        val type = intent.type ?: return
+        if (type.startsWith("text/")) {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+            if (!sharedText.isNullOrBlank()) {
+                // Extract URL from shared text (e.g. from YouTube or Twitter share sheet)
+                val urlRegex = Regex("""https?://[^\s]+""")
+                val foundUrl = urlRegex.find(sharedText)?.value ?: sharedText.trim()
+                videoPlayer.showUrlImportDialog(true)
+                videoPlayer.probeUrl(foundUrl)
+            }
+        } else if (type.startsWith("video/") || type.startsWith("audio/")) {
+            val mediaUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            if (mediaUri != null) {
+                videoPlayer.loadMedia(mediaUri)
             }
         }
     }
@@ -71,4 +79,5 @@ class MainActivity : ComponentActivity() {
         player?.release()
     }
 }
+
 
