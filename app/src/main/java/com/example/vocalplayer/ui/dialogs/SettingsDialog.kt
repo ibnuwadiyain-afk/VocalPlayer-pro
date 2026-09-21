@@ -57,6 +57,10 @@ fun SettingsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = StudioSurface,
+        tonalElevation = 0.dp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(20.dp)),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(

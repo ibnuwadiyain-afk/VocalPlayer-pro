@@ -195,9 +195,11 @@ fun VocalToggleBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "⏳ Vocal Only unlocks automatically once first separated chunk is ready",
+                    text = "⏳ Vocal separation initializing • Unlocks with first chunk",
                     color = TextTertiary,
-                    fontSize = 10.sp
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
         }

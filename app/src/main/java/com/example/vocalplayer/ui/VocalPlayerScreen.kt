@@ -511,6 +511,7 @@ fun VocalPlayerScreen(
             onProbeUrl = { url -> player.probeUrl(url) },
             onSelectOption = { option -> player.selectImportResolutionOption(option) },
             onStartDownload = { player.downloadAndLoadImportedMedia() },
+            onCancelDownload = { player.cancelDirectDownload() },
             onEnqueueBackgroundDownload = { player.enqueueBackgroundDownload() },
             onCancelBackgroundTask = { taskId -> player.cancelBackgroundDownload(taskId) },
             onRemoveBackgroundTask = { taskId -> player.removeBackgroundDownload(taskId) },

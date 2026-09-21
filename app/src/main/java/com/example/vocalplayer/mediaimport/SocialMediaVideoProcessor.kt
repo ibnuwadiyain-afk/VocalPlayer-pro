@@ -41,6 +41,12 @@ class SocialMediaVideoProcessor(private val context: Context) {
         .followSslRedirects(true)
         .build()
 
+    // Fast HTTP client specifically for stream probing to prevent UI hangs (max 4s connect / 5s read)
+    private val probeHttpClient: OkHttpClient = httpClient.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
     private val importCacheDir = File(context.cacheDir, "imported_media").apply { mkdirs() }
 
     private val defaultUserAgent =
@@ -163,7 +169,7 @@ class SocialMediaVideoProcessor(private val context: Context) {
                         .header("Referer", "https://www.y2mate.com/en")
                         .build()
 
-                    val response = httpClient.newCall(request).execute()
+                    val response = probeHttpClient.newCall(request).execute()
                     val body = response.body?.string() ?: ""
                     if (response.isSuccessful && body.contains("\"status\":\"success\"")) {
                         val json = JSONObject(body)
@@ -245,7 +251,7 @@ class SocialMediaVideoProcessor(private val context: Context) {
                         .url("$inv/api/v1/videos/$videoId")
                         .header("User-Agent", defaultUserAgent)
                         .build()
-                    val res = httpClient.newCall(req).execute()
+                    val res = probeHttpClient.newCall(req).execute()
                     if (res.isSuccessful) {
                         val body = res.body?.string() ?: ""
                         val json = JSONObject(body)
@@ -1089,7 +1095,15 @@ class SocialMediaVideoProcessor(private val context: Context) {
 
                     val elapsedSec = ((System.currentTimeMillis() - startTime) / 1000f).coerceAtLeast(0.1f)
                     val speedKbps = (totalBytesRead / 1024f) / elapsedSec
+                    val mbRead = totalBytesRead / (1024f * 1024f)
                     val progressRatio = if (contentLength > 0) (totalBytesRead.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f) else 0f
+
+                    val stageText = if (contentLength > 0) {
+                        val totalMb = contentLength / (1024f * 1024f)
+                        "Downloading (${(progressRatio * 100).toInt()}% • ${"%.1f".format(mbRead)}/${"%.1f".format(totalMb)} MB • ${"%.0f".format(speedKbps)} KB/s)"
+                    } else {
+                        "Downloading (${"%.2f".format(mbRead)} MB • ${"%.0f".format(speedKbps)} KB/s)"
+                    }
 
                     onProgress(
                         MediaImportProgress(
@@ -1097,7 +1111,7 @@ class SocialMediaVideoProcessor(private val context: Context) {
                             totalBytes = contentLength,
                             percentage = progressRatio,
                             speedKbps = speedKbps,
-                            stage = "Downloading (${(progressRatio * 100).toInt()}% • ${"%.1f".format(speedKbps)} KB/s)"
+                            stage = stageText
                         )
                     )
                 }

@@ -44,6 +44,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +95,7 @@ fun UrlImportDialog(
     onProbeUrl: (String) -> Unit,
     onSelectOption: (MediaResolutionOption) -> Unit,
     onStartDownload: () -> Unit,
+    onCancelDownload: () -> Unit = {},
     onEnqueueBackgroundDownload: () -> Unit = {},
     onCancelBackgroundTask: (String) -> Unit = {},
     onRemoveBackgroundTask: (String) -> Unit = {},
@@ -105,9 +107,7 @@ fun UrlImportDialog(
     val clipboardManager = LocalClipboardManager.current
 
     Dialog(
-        onDismissRequest = {
-            if (!isDownloading) onDismiss()
-        },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -163,14 +163,15 @@ fun UrlImportDialog(
                         }
                     }
 
-                    if (!isDownloading) {
-                        Text(
-                            text = "Cancel",
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                            modifier = Modifier
-                                .clickable { onDismiss() }
-                                .padding(4.dp)
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -526,21 +527,68 @@ fun UrlImportDialog(
                             }
                         }
 
-                        LinearProgressIndicator(
-                            progress = { importProgress?.percentage ?: 0f },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp)),
-                            color = VocalCyan,
-                            trackColor = StudioDarkBg
-                        )
+                        val totalBytes = importProgress?.totalBytes ?: -1L
+                        val percentage = importProgress?.percentage ?: 0f
+
+                        if (totalBytes > 0) {
+                            LinearProgressIndicator(
+                                progress = { percentage },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = VocalCyan,
+                                trackColor = StudioDarkBg
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = VocalCyan,
+                                trackColor = StudioDarkBg
+                            )
+                        }
 
                         Text(
                             text = "Stream will be prepared for 0ms lag vocal extraction upon download.",
                             color = TextSecondary,
                             fontSize = 10.sp
                         )
+
+                        // Action Controls to avoid locking user during download
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = onCancelDownload,
+                                colors = ButtonDefaults.textButtonColors(contentColor = VocalPink)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(text = "Cancel Download", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
+                            TextButton(
+                                onClick = onDismiss,
+                                colors = ButtonDefaults.textButtonColors(contentColor = VocalCyan)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(text = "Hide / Continue", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
 
@@ -683,15 +731,26 @@ fun UrlImportDialog(
                                 }
 
                                 if (task.status == DownloadTaskStatus.DOWNLOADING) {
-                                    LinearProgressIndicator(
-                                        progress = { task.progress },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(4.dp)
-                                            .clip(RoundedCornerShape(2.dp)),
-                                        color = VocalGreen,
-                                        trackColor = StudioDarkBg
-                                    )
+                                    if (task.totalBytes > 0) {
+                                        LinearProgressIndicator(
+                                            progress = { task.progress },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(4.dp)
+                                                .clip(RoundedCornerShape(2.dp)),
+                                            color = VocalGreen,
+                                            trackColor = StudioDarkBg
+                                        )
+                                    } else {
+                                        LinearProgressIndicator(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(4.dp)
+                                                .clip(RoundedCornerShape(2.dp)),
+                                            color = VocalGreen,
+                                            trackColor = StudioDarkBg
+                                        )
+                                    }
                                 }
                             }
                         }

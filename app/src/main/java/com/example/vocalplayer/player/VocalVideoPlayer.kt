@@ -61,6 +61,7 @@ class VocalVideoPlayer(private val context: Context) {
     private var extractionJob: Job? = null
     private var extractionTickerJob: Job? = null
     private var exportJob: Job? = null
+    private var directDownloadJob: Job? = null
     private var pipelinedMuxer: PipelinedVideoMuxer? = null
     private var pipelinedOutputFile: java.io.File? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
@@ -860,7 +861,8 @@ class VocalVideoPlayer(private val context: Context) {
         val probed = _uiState.value.probedMediaInfo ?: return
         val option = _uiState.value.selectedResolutionOption ?: probed.resolutions.firstOrNull() ?: return
 
-        scope.launch {
+        directDownloadJob?.cancel()
+        directDownloadJob = scope.launch {
             _uiState.update {
                 it.copy(
                     isDownloadingMedia = true,
@@ -901,6 +903,14 @@ class VocalVideoPlayer(private val context: Context) {
                         loadMedia(fileUri, probed.title)
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _uiState.update {
+                    it.copy(
+                        isDownloadingMedia = false,
+                        importProgress = null,
+                        statusMessage = "Media download cancelled"
+                    )
+                }
             } catch (e: Exception) {
                 android.util.Log.e("VocalVideoPlayer", "Media download error: ${e.message}", e)
                 _uiState.update {
@@ -910,6 +920,18 @@ class VocalVideoPlayer(private val context: Context) {
                     )
                 }
             }
+        }
+    }
+
+    fun cancelDirectDownload() {
+        directDownloadJob?.cancel()
+        directDownloadJob = null
+        _uiState.update {
+            it.copy(
+                isDownloadingMedia = false,
+                importProgress = null,
+                statusMessage = "Media download cancelled"
+            )
         }
     }
 
@@ -943,9 +965,17 @@ class VocalVideoPlayer(private val context: Context) {
     }
 
     fun loadMediaFromFile(file: java.io.File, title: String? = null) {
+        directDownloadJob?.cancel()
+        directDownloadJob = null
         val uri = Uri.fromFile(file)
         loadMedia(uri, title ?: file.nameWithoutExtension)
-        _uiState.update { it.copy(showUrlImportDialog = false) }
+        _uiState.update {
+            it.copy(
+                showUrlImportDialog = false,
+                isDownloadingMedia = false,
+                isProbingUrl = false
+            )
+        }
     }
 
     fun setAppLanguage(language: com.example.vocalplayer.i18n.AppLanguage) {
