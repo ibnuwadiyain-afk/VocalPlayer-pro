@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -39,14 +40,18 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VocalCyan
 import com.example.ui.theme.VocalGreen
+import com.example.vocalplayer.i18n.AppLanguage
+import com.example.vocalplayer.i18n.AppStrings
 import com.example.vocalplayer.neural.SeparationMode
 
 @Composable
 fun SettingsDialog(
     currentMode: SeparationMode,
     currentThreadCount: Int,
+    currentLanguage: AppLanguage = AppLanguage.ENGLISH,
     onModeSelected: (SeparationMode) -> Unit,
     onThreadCountSelected: (Int) -> Unit,
+    onLanguageSelected: (AppLanguage) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -62,7 +67,7 @@ fun SettingsDialog(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Engine Settings",
+                    text = AppStrings.get("engine_settings", currentLanguage),
                     color = TextPrimary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
@@ -71,8 +76,75 @@ fun SettingsDialog(
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // Language Preferences Section
                 Text(
-                    text = "SEPARATION MODE",
+                    text = AppStrings.get("select_language", currentLanguage),
+                    color = VocalCyan,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AppLanguage.values().take(3).forEach { lang ->
+                        val isSelected = lang == currentLanguage
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) VocalCyan else StudioDarkBg)
+                                .border(1.dp, if (isSelected) VocalCyan else StudioCardBorder, RoundedCornerShape(8.dp))
+                                .clickable { onLanguageSelected(lang) }
+                                .testTag("lang_btn_${lang.code}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = lang.nativeName,
+                                color = if (isSelected) StudioDarkBg else TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AppLanguage.values().drop(3).forEach { lang ->
+                        val isSelected = lang == currentLanguage
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) VocalCyan else StudioDarkBg)
+                                .border(1.dp, if (isSelected) VocalCyan else StudioCardBorder, RoundedCornerShape(8.dp))
+                                .clickable { onLanguageSelected(lang) }
+                                .testTag("lang_btn_${lang.code}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = lang.nativeName,
+                                color = if (isSelected) StudioDarkBg else TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = AppStrings.get("separation_mode", currentLanguage),
                     color = VocalCyan,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -133,7 +205,7 @@ fun SettingsDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "CPU INFERENCE THREADS",
+                    text = AppStrings.get("cpu_threads", currentLanguage),
                     color = VocalCyan,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -169,7 +241,7 @@ fun SettingsDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Offline Notice Box
+                // Arabic & Offline Notice Box
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -186,18 +258,27 @@ fun SettingsDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "100% Offline: All neural processing and video decoding occur directly on device.",
-                            color = TextSecondary,
-                            fontSize = 11.sp
-                        )
+                        Column {
+                            Text(
+                                text = AppStrings.get("offline_notice", currentLanguage),
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = AppStrings.get("arabic_export_support", currentLanguage),
+                                color = VocalGreen,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done", color = VocalCyan, fontWeight = FontWeight.Bold)
+                Text(AppStrings.get("done", currentLanguage), color = VocalCyan, fontWeight = FontWeight.Bold)
             }
         }
     )

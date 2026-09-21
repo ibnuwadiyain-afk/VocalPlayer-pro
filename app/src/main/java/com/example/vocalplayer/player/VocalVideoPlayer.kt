@@ -50,6 +50,7 @@ class VocalVideoPlayer(private val context: Context) {
 
     private val audioProcessor = NeuralAudioProcessor(separationEngine, cacheManager)
     private val socialMediaProcessor = com.example.vocalplayer.mediaimport.SocialMediaVideoProcessor(context)
+    val downloadManager = com.example.vocalplayer.mediaimport.MultitaskDownloadManager(context, socialMediaProcessor)
 
     val exoPlayer: ExoPlayer
 
@@ -102,6 +103,13 @@ class VocalVideoPlayer(private val context: Context) {
         refreshModelsList()
         val initialModel = modelManager.getActiveModel()
         selectModel(initialModel)
+
+        // Sync background multitask download tasks with PlayerUiState
+        scope.launch {
+            downloadManager.tasks.collect { tasksList ->
+                _uiState.update { it.copy(backgroundDownloads = tasksList) }
+            }
+        }
     }
 
     private fun setupPlayerListeners() {
@@ -903,6 +911,45 @@ class VocalVideoPlayer(private val context: Context) {
                 }
             }
         }
+    }
+
+    fun enqueueBackgroundDownload() {
+        val probed = _uiState.value.probedMediaInfo ?: return
+        val option = _uiState.value.selectedResolutionOption ?: probed.resolutions.firstOrNull() ?: return
+
+        downloadManager.enqueueDownload(probed, option)
+        _uiState.update {
+            it.copy(
+                showUrlImportDialog = false,
+                statusMessage = "Downloading '${probed.title}' in background..."
+            )
+        }
+    }
+
+    fun cancelBackgroundDownload(taskId: String) {
+        downloadManager.cancelTask(taskId)
+    }
+
+    fun removeBackgroundDownload(taskId: String) {
+        downloadManager.removeTask(taskId)
+    }
+
+    fun clearFinishedBackgroundDownloads() {
+        downloadManager.clearFinishedTasks()
+    }
+
+    fun clearCompletedBackgroundDownloads() {
+        downloadManager.clearFinishedTasks()
+    }
+
+    fun loadMediaFromFile(file: java.io.File, title: String? = null) {
+        val uri = Uri.fromFile(file)
+        loadMedia(uri, title ?: file.nameWithoutExtension)
+        _uiState.update { it.copy(showUrlImportDialog = false) }
+    }
+
+    fun setAppLanguage(language: com.example.vocalplayer.i18n.AppLanguage) {
+        _uiState.update { it.copy(appLanguage = language) }
     }
 
     fun clearStatusMessage() {

@@ -27,12 +27,19 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.FileDownloadDone
+import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -65,6 +72,10 @@ import com.example.ui.theme.VocalCyan
 import com.example.ui.theme.VocalGreen
 import com.example.ui.theme.VocalPink
 import com.example.ui.theme.VocalPurple
+import com.example.vocalplayer.i18n.AppLanguage
+import com.example.vocalplayer.i18n.AppStrings
+import com.example.vocalplayer.mediaimport.BackgroundDownloadTask
+import com.example.vocalplayer.mediaimport.DownloadTaskStatus
 import com.example.vocalplayer.mediaimport.MediaImportProgress
 import com.example.vocalplayer.mediaimport.MediaResolutionOption
 import com.example.vocalplayer.mediaimport.ProbedMediaInfo
@@ -78,9 +89,16 @@ fun UrlImportDialog(
     importProgress: MediaImportProgress?,
     errorMessage: String?,
     initialUrl: String = "",
+    backgroundDownloads: List<BackgroundDownloadTask> = emptyList(),
+    currentLanguage: AppLanguage = AppLanguage.ENGLISH,
     onProbeUrl: (String) -> Unit,
     onSelectOption: (MediaResolutionOption) -> Unit,
     onStartDownload: () -> Unit,
+    onEnqueueBackgroundDownload: () -> Unit = {},
+    onCancelBackgroundTask: (String) -> Unit = {},
+    onRemoveBackgroundTask: (String) -> Unit = {},
+    onClearFinishedTasks: () -> Unit = {},
+    onLoadCompletedMedia: (java.io.File, String) -> Unit = { _, _ -> },
     onDismiss: () -> Unit
 ) {
     var urlInput by remember { mutableStateOf(initialUrl) }
@@ -414,30 +432,65 @@ fun UrlImportDialog(
                             }
                         }
 
-                        // Start Download & Import Action
-                        Button(
-                            onClick = onStartDownload,
-                            enabled = selectedOption != null,
-                            colors = ButtonDefaults.buttonColors(containerColor = VocalCyan),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(46.dp)
-                                .testTag("start_download_button")
+                        // Start Download & Import Actions: Direct or Background Multitask
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.CloudDownload,
-                                contentDescription = null,
-                                tint = StudioDarkBg,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Download & Load into VocalPlayer",
-                                color = StudioDarkBg,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Button(
+                                onClick = onStartDownload,
+                                enabled = selectedOption != null && !isDownloading,
+                                colors = ButtonDefaults.buttonColors(containerColor = VocalCyan),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("start_download_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDownload,
+                                    contentDescription = null,
+                                    tint = StudioDarkBg,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = AppStrings.get("download_and_load", currentLanguage),
+                                    color = StudioDarkBg,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = onEnqueueBackgroundDownload,
+                                enabled = selectedOption != null,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = VocalGreen),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, VocalGreen),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("background_download_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = null,
+                                    tint = VocalGreen,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = AppStrings.get("download_in_background", currentLanguage),
+                                    color = VocalGreen,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -488,6 +541,160 @@ fun UrlImportDialog(
                             color = TextSecondary,
                             fontSize = 10.sp
                         )
+                    }
+                }
+
+                // Multitask Background Downloads Section
+                if (backgroundDownloads.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(StudioDarkBg)
+                            .border(1.dp, StudioCardBorder, RoundedCornerShape(12.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = null,
+                                    tint = VocalGreen,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = AppStrings.get("active_downloads", currentLanguage),
+                                    color = TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(VocalGreen.copy(alpha = 0.2f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "${backgroundDownloads.size}",
+                                        color = VocalGreen,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Text(
+                                text = AppStrings.get("clear_completed", currentLanguage),
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                modifier = Modifier
+                                    .clickable { onClearFinishedTasks() }
+                                    .padding(4.dp)
+                            )
+                        }
+
+                        backgroundDownloads.forEach { task ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(StudioSurface)
+                                    .border(1.dp, StudioCardBorder, RoundedCornerShape(8.dp))
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = task.title,
+                                            color = TextPrimary,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${task.platformName} • ${task.resolutionLabel} • ${task.statusMessage}",
+                                            color = when (task.status) {
+                                                DownloadTaskStatus.COMPLETED -> VocalGreen
+                                                DownloadTaskStatus.FAILED -> VocalPink
+                                                DownloadTaskStatus.DOWNLOADING -> VocalCyan
+                                                else -> TextSecondary
+                                            },
+                                            fontSize = 10.sp
+                                        )
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        if (task.status == DownloadTaskStatus.COMPLETED && task.completedFile != null) {
+                                            IconButton(
+                                                onClick = { onLoadCompletedMedia(task.completedFile, task.title) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.PlayArrow,
+                                                    contentDescription = "Play",
+                                                    tint = VocalGreen,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+
+                                        if (task.status == DownloadTaskStatus.DOWNLOADING || task.status == DownloadTaskStatus.QUEUED || task.status == DownloadTaskStatus.RESOLVING) {
+                                            IconButton(
+                                                onClick = { onCancelBackgroundTask(task.id) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Cancel",
+                                                    tint = TextSecondary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else {
+                                            IconButton(
+                                                onClick = { onRemoveBackgroundTask(task.id) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Remove",
+                                                    tint = TextSecondary,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (task.status == DownloadTaskStatus.DOWNLOADING) {
+                                    LinearProgressIndicator(
+                                        progress = { task.progress },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(4.dp)
+                                            .clip(RoundedCornerShape(2.dp)),
+                                        color = VocalGreen,
+                                        trackColor = StudioDarkBg
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

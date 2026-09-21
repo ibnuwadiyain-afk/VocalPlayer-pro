@@ -80,7 +80,11 @@ data class PlayerUiState(
     val probedMediaInfo: com.example.vocalplayer.mediaimport.ProbedMediaInfo? = null,
     val selectedResolutionOption: com.example.vocalplayer.mediaimport.MediaResolutionOption? = null,
     val importProgress: com.example.vocalplayer.mediaimport.MediaImportProgress? = null,
-    val importErrorMessage: String? = null
+    val importErrorMessage: String? = null,
+
+    // Multitask Background Downloads & Multilingual UI
+    val backgroundDownloads: List<com.example.vocalplayer.mediaimport.BackgroundDownloadTask> = emptyList(),
+    val appLanguage: com.example.vocalplayer.i18n.AppLanguage = com.example.vocalplayer.i18n.AppLanguage.ENGLISH
 ) {
     /** True when at least one separated vocal audio chunk is available to play. */
     val hasVocalChunksGenerated: Boolean

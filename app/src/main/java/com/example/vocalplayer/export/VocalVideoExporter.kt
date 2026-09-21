@@ -54,9 +54,8 @@ class VocalVideoExporter(private val context: Context) {
      * Creates a new destination File for pipelined background video export.
      */
     fun createExportOutputFile(title: String): File {
-        val cleanTitle = title.ifBlank { "vocal_isolated" }
-            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        return File(exportDir, "${cleanTitle}_muted_instruments_${System.currentTimeMillis()}.mp4")
+        val safeFileName = ExportNameNormalizer.sanitizeFileName(title)
+        return File(exportDir, "${safeFileName}_muted_instruments_${System.currentTimeMillis()}.mp4")
     }
 
     /**
@@ -70,11 +69,11 @@ class VocalVideoExporter(private val context: Context) {
         deleteOriginal: Boolean = false,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): ExportResult = withContext(Dispatchers.IO) {
-        val cleanTitle = title.ifBlank { "vocal_isolated" }
-            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val displayFileName = ExportNameNormalizer.formatExportFileName(title)
+        val formattedTitle = ExportNameNormalizer.formatExportTitle(title)
 
         onProgress(0.95f, "Finalizing video in media gallery...")
-        val mediaStoreUri = saveToMediaStore(outputFile, "${cleanTitle}_muted_instruments.mp4")
+        val mediaStoreUri = saveToMediaStore(outputFile, displayFileName)
         val fileProviderUri = getFileProviderUri(outputFile)
 
         var originalDeleted = false
@@ -92,7 +91,7 @@ class VocalVideoExporter(private val context: Context) {
             fileProviderUri = fileProviderUri,
             durationMs = durationMs,
             fileSizeBytes = outputFile.length(),
-            title = "$cleanTitle (Instruments Muted)",
+            title = formattedTitle,
             originalDeleted = originalDeleted
         )
     }
@@ -166,9 +165,10 @@ class VocalVideoExporter(private val context: Context) {
         deleteOriginal: Boolean = false,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): ExportResult = withContext(Dispatchers.IO) {
-        val cleanTitle = title.ifBlank { "vocal_isolated" }
-            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        val outputFile = File(exportDir, "${cleanTitle}_muted_instruments_${System.currentTimeMillis()}.mp4")
+        val safeFileName = ExportNameNormalizer.sanitizeFileName(title)
+        val displayFileName = ExportNameNormalizer.formatExportFileName(title)
+        val formattedTitle = ExportNameNormalizer.formatExportTitle(title)
+        val outputFile = File(exportDir, "${safeFileName}_muted_instruments_${System.currentTimeMillis()}.mp4")
 
         onProgress(0.05f, "Inspecting video source tracks...")
 
@@ -226,7 +226,7 @@ class VocalVideoExporter(private val context: Context) {
 
         onProgress(0.95f, "Saving to media gallery...")
 
-        val mediaStoreUri = saveToMediaStore(outputFile, "${cleanTitle}_muted_instruments.mp4")
+        val mediaStoreUri = saveToMediaStore(outputFile, displayFileName)
         val fileProviderUri = getFileProviderUri(outputFile)
 
         var originalDeleted = false
@@ -244,7 +244,7 @@ class VocalVideoExporter(private val context: Context) {
             fileProviderUri = fileProviderUri,
             durationMs = durationMs,
             fileSizeBytes = outputFile.length(),
-            title = "$cleanTitle (Instruments Muted)",
+            title = formattedTitle,
             originalDeleted = originalDeleted
         )
     }

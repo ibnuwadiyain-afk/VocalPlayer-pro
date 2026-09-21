@@ -49,4 +49,27 @@ class ExportAndPipelinedMuxerTest {
         assertEquals("Test Track", result.title)
         assertEquals(30000L, result.durationMs)
     }
+
+    @Test
+    fun testArabicExportNameNormalization() {
+        val arabicTitle = "أغنية_عربية_جميلة"
+        assertTrue(com.example.vocalplayer.export.ExportNameNormalizer.isArabic(arabicTitle))
+
+        val sanitizedDisplay = com.example.vocalplayer.export.ExportNameNormalizer.sanitizeDisplayName("أغنية/عربية:جميلة")
+        assertTrue(sanitizedDisplay.contains("أغنية"))
+        assertFalse(sanitizedDisplay.contains("/"))
+        assertFalse(sanitizedDisplay.contains(":"))
+
+        val outputFilename = com.example.vocalplayer.export.ExportNameNormalizer.formatExportFileName("أغنية_الصباح")
+        assertTrue(outputFilename.contains("أغنية_الصباح"))
+        assertTrue(outputFilename.endsWith(".mp4"))
+    }
+
+    @Test
+    fun testMultilingualTranslations() {
+        val engText = com.example.vocalplayer.i18n.AppStrings.get("engine_settings", com.example.vocalplayer.i18n.AppLanguage.ENGLISH)
+        val arText = com.example.vocalplayer.i18n.AppStrings.get("engine_settings", com.example.vocalplayer.i18n.AppLanguage.ARABIC)
+        assertEquals("Engine Settings", engText)
+        assertEquals("إعدادات المحرك", arText)
+    }
 }

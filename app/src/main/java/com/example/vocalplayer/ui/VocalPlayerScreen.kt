@@ -461,8 +461,10 @@ fun VocalPlayerScreen(
         SettingsDialog(
             currentMode = uiState.separationMode,
             currentThreadCount = uiState.threadCount,
+            currentLanguage = uiState.appLanguage,
             onModeSelected = { mode -> player.setSeparationMode(mode) },
             onThreadCountSelected = { count -> player.setThreadCount(count) },
+            onLanguageSelected = { lang -> player.setAppLanguage(lang) },
             onDismiss = { player.showSettingsDialog(false) }
         )
     }
@@ -487,6 +489,7 @@ fun VocalPlayerScreen(
             deleteOriginal = uiState.deleteOriginalAfterExport,
             onDeleteOriginalChange = { player.setDeleteOriginalAfterExport(it) },
             isPipelinedReady = uiState.isPipelinedExportReady,
+            currentLanguage = uiState.appLanguage,
             onShareVideo = { player.shareExportedVideo() },
             onPlayExportedVideo = { player.playExportedVideo() },
             onCancelExport = { player.cancelExport() },
@@ -503,9 +506,16 @@ fun VocalPlayerScreen(
             selectedOption = uiState.selectedResolutionOption,
             importProgress = uiState.importProgress,
             errorMessage = uiState.importErrorMessage,
+            backgroundDownloads = uiState.backgroundDownloads,
+            currentLanguage = uiState.appLanguage,
             onProbeUrl = { url -> player.probeUrl(url) },
             onSelectOption = { option -> player.selectImportResolutionOption(option) },
             onStartDownload = { player.downloadAndLoadImportedMedia() },
+            onEnqueueBackgroundDownload = { player.enqueueBackgroundDownload() },
+            onCancelBackgroundTask = { taskId -> player.cancelBackgroundDownload(taskId) },
+            onRemoveBackgroundTask = { taskId -> player.removeBackgroundDownload(taskId) },
+            onClearFinishedTasks = { player.clearCompletedBackgroundDownloads() },
+            onLoadCompletedMedia = { file, title -> player.loadMediaFromFile(file, title) },
             onDismiss = { player.showUrlImportDialog(false) }
         )
     }

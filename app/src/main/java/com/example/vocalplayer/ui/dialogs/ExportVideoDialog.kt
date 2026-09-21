@@ -62,6 +62,8 @@ import com.example.ui.theme.VocalOrange
 import com.example.ui.theme.VocalPink
 import com.example.ui.theme.VocalPurple
 import com.example.vocalplayer.export.ExportResult
+import com.example.vocalplayer.i18n.AppLanguage
+import com.example.vocalplayer.i18n.AppStrings
 
 @Composable
 fun ExportVideoDialog(
@@ -73,6 +75,7 @@ fun ExportVideoDialog(
     deleteOriginal: Boolean = false,
     onDeleteOriginalChange: (Boolean) -> Unit = {},
     isPipelinedReady: Boolean = false,
+    currentLanguage: AppLanguage = AppLanguage.ENGLISH,
     onShareVideo: () -> Unit,
     onPlayExportedVideo: () -> Unit,
     onCancelExport: () -> Unit,
@@ -545,7 +548,7 @@ fun ExportVideoDialog(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Start Video Export",
+                                    text = AppStrings.get("start_export", currentLanguage),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
